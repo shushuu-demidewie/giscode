@@ -6,6 +6,17 @@ Cài đặt: pip install rasterio geopandas scikit-learn numpy joblib
 """
 
 import os
+import sys
+
+# Đảm bảo hiển thị tiếng Việt trên terminal Windows không bị lỗi font/mã hóa
+if sys.stdout and sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if sys.stderr and sys.stderr.encoding != 'utf-8':
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
+# Tự động tạo lại file .shx nếu bị thiếu khi đọc Shapefile
+os.environ['SHAPE_RESTORE_SHX'] = 'YES'
+
 import numpy as np
 import rasterio
 from rasterio.mask import mask
@@ -17,22 +28,31 @@ import joblib
 
 
 # ==============================================================================
-# CẤU HÌNH ĐƯỜNG DẪN FILE (ĐIỀN ĐƯỜNG DẪN CỦA BẠN VÀO ĐÂY)
+# CẤU HÌNH ĐƯỜNG DẪN FILE DỮ LIỆU CÓ SẴN TRONG MÁY
 # ==============================================================================
+# Tự động định vị thư mục gốc dự án (d:\testgis)
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
 # 1. Đường dẫn ảnh GeoTIFF đầu vào (ảnh Landsat 7 kênh cắt từ khu vực Hà Nội)
-IMAGE_PATH = r"c:\ANH_VIEN_THAM\test1\LC8_HANOI_2026\anhcat.tif"
+IMAGE_PATH = os.path.join(BASE_DIR, 'datahanoi', 'anhcat.tif')
+
+# Fallback nếu chuyển sang thư mục DLGIS
+if not os.path.exists(IMAGE_PATH):
+    fallback_img = r"D:\DLGIS\hanoi2026\datahanoi\anhcat01.tif"
+    if os.path.exists(fallback_img):
+        IMAGE_PATH = fallback_img
 
 # 2. Đường dẫn file Shapefile (.shp) vùng mẫu trích xuất / số hóa từ ArcMap
-ROI_SHAPEFILE_PATH = r"c:\ANH_VIEN_THAM\test1\DKT36.shp"
+ROI_SHAPEFILE_PATH = os.path.join(BASE_DIR, 'Dkt', 'DKT30.shp')
 
-# 3. Tên cột chứa mã loại / lớp phân loại trong bảng thuộc tính ArcMap (trong file DKT36 là 'Nhan')
+# 3. Tên cột chứa mã loại / lớp phân loại trong bảng thuộc tính ArcMap (trong file DKT30 là 'Nhan')
 CLASS_COLUMN_NAME = "Nhan"
 
 # 4. Đường dẫn lưu ảnh kết quả phân loại (GeoTIFF)
-OUTPUT_RASTER_PATH = r"c:\ANH_VIEN_THAM\test1\anh_phan_loai_rf.tif"
+OUTPUT_RASTER_PATH = os.path.join(BASE_DIR, 'data', 'anh_phan_loai_rf.tif')
 
 # 5. Đường dẫn lưu mô hình Random Forest sau khi huấn luyện (tùy chọn)
-MODEL_SAVE_PATH = r"c:\ANH_VIEN_THAM\test1\rf_model.pkl"
+MODEL_SAVE_PATH = os.path.join(BASE_DIR, 'giscode', 'rf_model.pkl')
 
 
 # ==============================================================================
@@ -53,7 +73,13 @@ def extract_training_data(image_path, roi_path, class_col):
     roi_gdf = gpd.read_file(roi_path)
 
     if class_col not in roi_gdf.columns:
-        raise ValueError(f"Không tìm thấy cột '{class_col}' trong Shapefile. Các cột hiện có: {list(roi_gdf.columns)}")
+        for candidate in ["Nhan", "nhan", "NHAN", "label", "Classvalue", "Classname", "Id"]:
+            if candidate in roi_gdf.columns and roi_gdf[candidate].nunique() > 1:
+                print(f"[*] Cột '{class_col}' không tồn tại, tự động chuyển sang cột: '{candidate}'")
+                class_col = candidate
+                break
+        else:
+            raise ValueError(f"Không tìm thấy cột '{class_col}' trong Shapefile. Các cột hiện có: {list(roi_gdf.columns)}")
 
     X_list = []
     y_list = []
@@ -176,6 +202,8 @@ def classify_and_export_raster(image_path, model, output_path, block_size=1024):
     print(f"\n[*] Bắt đầu phân loại toàn bộ ảnh: {image_path}")
     print(f"[*] File kết quả sẽ được lưu tại: {output_path}")
 
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+
     with rasterio.open(image_path) as src:
         profile = src.profile.copy()
         
@@ -228,6 +256,48 @@ def classify_and_export_raster(image_path, model, output_path, block_size=1024):
 
     print(f"[+] Hoàn tất! Ảnh phân loại đã được lưu thành công tại: {output_path}")
 
+    # Tự động xuất ảnh màu PNG để xem trực quan ngay trên Paint / Photo Viewer
+    export_preview_image(output_path)
+
+
+def export_preview_image(raster_path, png_path=None):
+    """
+    Xuất ảnh màu RGB (.png) để xem trực quan trên Paint, Photo Viewer mà không cần mở GIS.
+    """
+    if png_path is None:
+        png_path = os.path.splitext(raster_path)[0] + "_preview.png"
+
+    try:
+        from PIL import Image
+        with rasterio.open(raster_path) as src:
+            data = src.read(1)
+
+        # Bảng màu đại diện cho các lớp phân loại
+        color_map = {
+            1: [34, 139, 34],      # Xanh lá cây (Thực vật / Rừng)
+            7: [30, 144, 255],     # Xanh dương (Mặt nước / Sông hồ)
+            10: [220, 20, 60],     # Đỏ (Đô thị / Nhà cửa)
+            14: [238, 201, 0],     # Vàng (Đất trống / Nông nghiệp)
+        }
+
+        h, w = data.shape
+        rgb = np.zeros((h, w, 3), dtype=np.uint8)
+        rgb[:, :] = [230, 230, 230]  # Màu xám cho NoData ngoài ranh giới
+
+        for val, col in color_map.items():
+            rgb[data == val] = col
+
+        img = Image.fromarray(rgb)
+        # Phóng to theo tỷ lệ phù hợp để xem rõ pixel
+        scale = max(1, 600 // max(h, w))
+        if scale > 1:
+            img = img.resize((w * scale, h * scale), Image.NEAREST)
+
+        img.save(png_path)
+        print(f"[+] Đã tạo ảnh màu xem trước trực quan tại: {png_path}")
+    except Exception as e:
+        print(f"[!] Không thể xuất ảnh xem trước: {e}")
+
 
 # ==============================================================================
 # HÀM THỰC THI CHÍNH
@@ -254,6 +324,7 @@ def main():
     )
 
     # 3. Lưu mô hình đã huấn luyện (.pkl)
+    os.makedirs(os.path.dirname(os.path.abspath(MODEL_SAVE_PATH)), exist_ok=True)
     joblib.dump(rf_model, MODEL_SAVE_PATH)
     print(f"[*] Đã lưu mô hình Random Forest tại: {MODEL_SAVE_PATH}")
 
