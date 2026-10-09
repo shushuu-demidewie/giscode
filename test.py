@@ -26,15 +26,14 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 # Đường dẫn thư mục ảnh viễn thám và file Shapefile trên máy
 folder_path = os.path.join(BASE_DIR, 'datahanoi')
 shp_path = os.path.join(BASE_DIR, 'Dkt', 'DKT30.shp')
+xa_tif_path = os.path.join(BASE_DIR, 'data', 'longchoose1.tif')
+xa_shp_path = os.path.join(BASE_DIR, 'data', 'KQ_Tach01.shp')
 
 # Fallback nếu chạy ở thư mục khác hoặc đường dẫn cố định
 if not os.path.exists(folder_path):
     folder_path = r'D:\testgis\datahanoi'
 if not os.path.exists(shp_path):
     shp_path = r'D:\testgis\Dkt\DKT30.shp'
-
-print(f"-> Thư mục ảnh: {folder_path}")
-print(f"-> File mẫu Shapefile: {shp_path}")
 
 def get_band_path(band_name):
     # Tìm kiếm linh hoạt file ảnh tương ứng với kênh trong thư mục
@@ -46,23 +45,35 @@ def get_band_path(band_name):
     return os.path.join(folder_path, f"{prefix}_{band_name}.TIF")
 
 #
-# 2. ĐỌC ẢNH (B1 ĐẾN B7) VÀ TÍNH CHỈ SỐ
+# 2. ĐỌC ẢNH VÀ TÍNH CHỈ SỐ THEO PHẠM VI XÃ
 #
-print("Đang đọc các kênh quang học (B1 - B7)...")
+if os.path.exists(xa_tif_path):
+    print(f"-> Đang đọc ảnh viễn thám theo xã từ: {xa_tif_path}")
+    with rasterio.open(xa_tif_path) as src:
+        b1 = src.read(1).astype(float)
+        b2 = src.read(2).astype(float)
+        b3 = src.read(3).astype(float)
+        b4 = src.read(4).astype(float)
+        b5 = src.read(5).astype(float)
+        b6 = src.read(6).astype(float)
+        b7 = src.read(7).astype(float)
+        src_crs = src.crs
+        src_transform = src.transform
+        src_shape = src.shape
+else:
+    print("-> Đang đọc các kênh quang học (B1 - B7) từ thư mục gốc...")
+    with rasterio.open(get_band_path('SR_B1')) as src:
+        b1 = src.read(1).astype(float)
+        src_crs = src.crs
+        src_transform = src.transform
+        src_shape = src.shape
 
-# Đọc B1 và lấy thông tin không gian gốc
-with rasterio.open(get_band_path('SR_B1')) as src:
-    b1 = src.read(1).astype(float)
-    src_crs = src.crs
-    src_transform = src.transform
-    src_shape = src.shape
-
-with rasterio.open(get_band_path('SR_B2')) as src: b2 = src.read(1).astype(float)
-with rasterio.open(get_band_path('SR_B3')) as src: b3 = src.read(1).astype(float)
-with rasterio.open(get_band_path('SR_B4')) as src: b4 = src.read(1).astype(float)
-with rasterio.open(get_band_path('SR_B5')) as src: b5 = src.read(1).astype(float)
-with rasterio.open(get_band_path('SR_B6')) as src: b6 = src.read(1).astype(float)
-with rasterio.open(get_band_path('SR_B7')) as src: b7 = src.read(1).astype(float)
+    with rasterio.open(get_band_path('SR_B2')) as src: b2 = src.read(1).astype(float)
+    with rasterio.open(get_band_path('SR_B3')) as src: b3 = src.read(1).astype(float)
+    with rasterio.open(get_band_path('SR_B4')) as src: b4 = src.read(1).astype(float)
+    with rasterio.open(get_band_path('SR_B5')) as src: b5 = src.read(1).astype(float)
+    with rasterio.open(get_band_path('SR_B6')) as src: b6 = src.read(1).astype(float)
+    with rasterio.open(get_band_path('SR_B7')) as src: b7 = src.read(1).astype(float)
 
 print("Đang tính toán các chỉ số chuyên sâu (NDVI, NDWI, NDBI)...")
 np.seterr(divide='ignore', invalid='ignore')
@@ -72,8 +83,53 @@ ndvi = np.nan_to_num((b5 - b4) / (b5 + b4), nan=0.0)
 ndwi = np.nan_to_num((b3 - b5) / (b3 + b5), nan=0.0)
 ndbi = np.nan_to_num((b6 - b5) / (b6 + b5), nan=0.0)
 
-# Gộp 10 kênh dữ liệu (7 quang học B1-B7 + 3 chỉ số)
+# Gộp 10 kênh dữ liệu (7 quang học B1-B7 + 3 chỉ số) phục vụ mô hình
 stacked_image = np.stack((b1, b2, b3, b4, b5, b6, b7, ndvi, ndwi, ndbi))
+
+# Chuẩn bị dữ liệu hiển thị (áp dụng mặt nạ ranh giới xã để chỉ hiện đúng khuôn viên xã)
+ndvi_plot = ndvi.copy()
+ndwi_plot = ndwi.copy()
+ndbi_plot = ndbi.copy()
+
+if os.path.exists(xa_shp_path):
+    print(f"-> Đang áp dụng mặt nạ ranh giới xã từ: {xa_shp_path}")
+    xa_gdf = gpd.read_file(xa_shp_path)
+    if xa_gdf.crs is None:
+        xa_gdf.crs = 'EPSG:4326'
+    xa_gdf = xa_gdf.to_crs(src_crs)
+    mask_xa = geometry_mask(xa_gdf.geometry, transform=src_transform, invert=True, out_shape=src_shape)
+
+    # Đặt các pixel ngoài ranh giới xã thành NaN để không hiển thị (trong suốt)
+    ndvi_plot[~mask_xa] = np.nan
+    ndwi_plot[~mask_xa] = np.nan
+    ndbi_plot[~mask_xa] = np.nan
+
+# Hiển thị biểu đồ 3 chỉ số phổ bằng matplotlib
+import matplotlib.pyplot as plt
+
+print("Đang hiển thị biểu đồ 3 chỉ số phổ của xã...")
+fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+# 1. NDVI (Thực vật - Thường dùng bảng màu xanh lá cây)
+im1 = axes[0].imshow(ndvi_plot, cmap='RdYlGn', vmin=-0.2, vmax=0.8)
+axes[0].set_title("Chỉ số thực vật (NDVI)")
+axes[0].axis('off')
+fig.colorbar(im1, ax=axes[0], fraction=0.046, pad=0.04)
+
+# 2. NDWI (Mặt nước - Thường dùng bảng màu xanh dương)
+im2 = axes[1].imshow(ndwi_plot, cmap='Blues', vmin=-0.5, vmax=0.5)
+axes[1].set_title("Chỉ số nước (NDWI)")
+axes[1].axis('off')
+fig.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
+
+# 3. NDBI (Đô thị / Đất xây dựng - Thường dùng bảng màu đỏ/cam/xám)
+im3 = axes[2].imshow(ndbi_plot, cmap='coolwarm', vmin=-0.5, vmax=0.5)
+axes[2].set_title("Chỉ số xây dựng (NDBI)")
+axes[2].axis('off')
+fig.colorbar(im3, ax=axes[2], fraction=0.046, pad=0.04)
+
+plt.tight_layout()
+plt.show()
 
 #
 # 3. TRÍCH XUẤT ĐẶC TRƯNG TỪ MẪU SHAPEFILE
