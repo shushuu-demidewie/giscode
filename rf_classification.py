@@ -262,27 +262,39 @@ def classify_and_export_raster(image_path, model, output_path, block_size=1024):
 
 def export_preview_image(raster_path, png_path=None):
     """
-    Xuất ảnh màu RGB (.png) để xem trực quan trên Paint, Photo Viewer mà không cần mở GIS.
+    Xuất ảnh màu RGB (.png) để xem trực quan và tạo file .clr tương thích với ArcMap.
     """
     if png_path is None:
         png_path = os.path.splitext(raster_path)[0] + "_preview.png"
 
+    # Bảng màu đại diện cho các lớp chuẩn theo ArcMap
+    # 1: Rừng (xanh lá chuối / tươi), 7: Thủy hệ (xanh dương), 10: Dân cư (tím hồng), 14: Đất trống (vàng nhạt)
+    color_map = {
+        1: [76, 230, 0],       # Rừng (Xanh lá sáng / Lime Green)
+        7: [0, 112, 255],      # Thủy hệ (Xanh dương)
+        10: [223, 115, 255],   # Dân cư (Tím hồng / Orchid - giống ArcMap)
+        14: [255, 255, 115],   # Đất trống (Vàng chanh)
+    }
+
+    # 1. Tự động tạo file bảng màu .clr để ArcMap tự nhận đúng màu khi mở file TIF
+    clr_path = os.path.splitext(raster_path)[0] + ".clr"
+    try:
+        with open(clr_path, "w", encoding="utf-8") as f_clr:
+            for val, col in sorted(color_map.items()):
+                f_clr.write(f"{val} {col[0]} {col[1]} {col[2]}\n")
+        print(f"[+] Đã tạo file bảng màu ArcMap (.clr) tại: {clr_path}")
+    except Exception as e:
+        print(f"[!] Không thể tạo file .clr: {e}")
+
+    # 2. Xuất ảnh màu xem trước .png
     try:
         from PIL import Image
         with rasterio.open(raster_path) as src:
             data = src.read(1)
 
-        # Bảng màu đại diện cho các lớp phân loại
-        color_map = {
-            1: [34, 139, 34],      # Xanh lá cây (Thực vật / Rừng)
-            7: [30, 144, 255],     # Xanh dương (Mặt nước / Sông hồ)
-            10: [220, 20, 60],     # Đỏ (Đô thị / Nhà cửa)
-            14: [238, 201, 0],     # Vàng (Đất trống / Nông nghiệp)
-        }
-
         h, w = data.shape
         rgb = np.zeros((h, w, 3), dtype=np.uint8)
-        rgb[:, :] = [230, 230, 230]  # Màu xám cho NoData ngoài ranh giới
+        rgb[:, :] = [255, 255, 255]  # Nền ngoài ranh giới màu trắng sạch sẽ
 
         for val, col in color_map.items():
             rgb[data == val] = col
