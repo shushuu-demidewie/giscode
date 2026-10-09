@@ -17,10 +17,31 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score, confusion_matrix, cohen_kappa_score
 
-folder_path = r'D:\test\LC08_L2SP_127045_20260901_20260911_02_T1'
-shp_path = r'D:\test\dong_anh_pl\dong_anh_trainning.shp'
+# Tự động tạo lại file .shx nếu bị thiếu khi đọc Shapefile
+os.environ['SHAPE_RESTORE_SHX'] = 'YES'
+
+# Tự động định vị thư mục gốc của dự án (d:\testgis)
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+# Đường dẫn thư mục ảnh viễn thám và file Shapefile trên máy
+folder_path = os.path.join(BASE_DIR, 'datahanoi')
+shp_path = os.path.join(BASE_DIR, 'Dkt', 'DKT30.shp')
+
+# Fallback nếu chạy ở thư mục khác hoặc đường dẫn cố định
+if not os.path.exists(folder_path):
+    folder_path = r'D:\testgis\datahanoi'
+if not os.path.exists(shp_path):
+    shp_path = r'D:\testgis\Dkt\DKT30.shp'
+
+print(f"-> Thư mục ảnh: {folder_path}")
+print(f"-> File mẫu Shapefile: {shp_path}")
 
 def get_band_path(band_name):
+    # Tìm kiếm linh hoạt file ảnh tương ứng với kênh trong thư mục
+    if os.path.exists(folder_path):
+        for fname in os.listdir(folder_path):
+            if fname.upper().endswith(f"_{band_name.upper()}.TIF"):
+                return os.path.join(folder_path, fname)
     prefix = 'LC08_L2SP_127045_20260901_20260911_02_T1'
     return os.path.join(folder_path, f"{prefix}_{band_name}.TIF")
 
@@ -70,21 +91,29 @@ if samples.crs != src_crs:
     print(f"-> Đang đồng bộ hệ tọa độ từ {samples.crs} sang {src_crs}...")
     samples = samples.to_crs(src_crs)
 
-# Xác định cột nhãn phân loại (ưu tiên 'label', 'Classvalue', 'Id')
-if 'label' in samples.columns and samples['label'].nunique() > 1:
-    label_col = 'label'
-elif 'Classvalue' in samples.columns and samples['Classvalue'].nunique() > 1:
-    label_col = 'Classvalue'
-elif 'Classname' in samples.columns and samples['Classname'].nunique() > 1:
-    label_col = 'Classname'
-else:
-    label_col = 'Id'
+# Xác định cột nhãn phân loại (ưu tiên 'Nhan', 'label', 'Classvalue', 'Classname', 'Id')
+priority_cols = ['label', 'Nhan', 'nhan', 'NHAN', 'Classvalue', 'Classname', 'Id']
+label_col = None
+for col in priority_cols:
+    if col in samples.columns and samples[col].nunique() > 1:
+        label_col = col
+        break
+
+if not label_col:
+    # Tìm cột bất kỳ có > 1 giá trị phân loại khác biệt
+    for col in samples.columns:
+        if col != 'geometry' and samples[col].nunique() > 1:
+            label_col = col
+            break
+    if not label_col:
+        label_col = 'Id'
 
 print(f"-> Sử dụng cột nhãn: '{label_col}' (gồm {samples[label_col].nunique()} lớp)")
 
 if 'Classname' in samples.columns and label_col == 'Classvalue':
     mapping = dict(zip(samples['Classvalue'], samples['Classname']))
     print(f"-> Danh mục lớp: {mapping}")
+
 
 X_raw = []
 y_raw = []
