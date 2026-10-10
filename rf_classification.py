@@ -153,16 +153,30 @@ def extract_training_data(image_path, roi_path, class_col):
 # ==============================================================================
 # BƯỚC 2: HUẤN LUYỆN VÀ ĐÁNH GIÁ THUẬT TOÁN RANDOM FOREST
 # ==============================================================================
-def train_random_forest(X, y, n_estimators=100, max_depth=None, test_size=0.2, random_state=42):
+def train_random_forest(X, y, n_estimators=100, max_depth=None, train_ratio=0.70, val_ratio=0.15, test_ratio=0.15, random_state=42):
     """
-    Chia tập train/test, huấn luyện Random Forest và in báo cáo độ chính xác.
+    Chia tập dữ liệu theo tỷ lệ Train / Val / Test (mặc định 70% / 15% / 15%),
+    huấn luyện Random Forest và đánh giá mô hình trên cả 2 tập Validation và Test.
     """
-    print("\n[*] Đang chia tập dữ liệu Train / Test...")
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state, stratify=y
+    print(f"\n[*] Đang chia tập dữ liệu ({int(train_ratio*100)}% Train - {int(val_ratio*100)}% Val - {int(test_ratio*100)}% Test)...")
+    
+    # Bước 1: Tách tập Train (70%) và phần còn lại (30% gồm Val + Test)
+    temp_ratio = val_ratio + test_ratio
+    X_train, X_temp, y_train, y_temp = train_test_split(
+        X, y, test_size=temp_ratio, random_state=random_state, stratify=y
     )
 
-    print(f"[*] Đang huấn luyện Random Forest ({n_estimators} cây)...")
+    # Bước 2: Tách phần còn lại thành tập Validation (15%) và Test (15%)
+    relative_test_ratio = test_ratio / temp_ratio
+    X_val, X_test, y_val, y_test = train_test_split(
+        X_temp, y_temp, test_size=relative_test_ratio, random_state=random_state, stratify=y_temp
+    )
+
+    print(f"    - Tập Train:      {len(X_train)} mẫu ({len(X_train)/len(X)*100:.1f}%)")
+    print(f"    - Tập Validation: {len(X_val)} mẫu ({len(X_val)/len(X)*100:.1f}%)")
+    print(f"    - Tập Test:       {len(X_test)} mẫu ({len(X_test)/len(X)*100:.1f}%)")
+
+    print(f"\n[*] Đang huấn luyện Random Forest ({n_estimators} cây)...")
     rf_clf = RandomForestClassifier(
         n_estimators=n_estimators,
         max_depth=max_depth,
@@ -172,21 +186,32 @@ def train_random_forest(X, y, n_estimators=100, max_depth=None, test_size=0.2, r
     )
     rf_clf.fit(X_train, y_train)
 
-    # Đánh giá trên tập kiểm tra độc lập
-    y_pred = rf_clf.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
+    # 1. Đánh giá trên tập Validation
+    y_val_pred = rf_clf.predict(X_val)
+    val_acc = accuracy_score(y_val, y_val_pred)
     print("\n" + "="*50)
-    print("KẾT QUẢ ĐÁNH GIÁ MÔ HÌNH RANDOM FOREST")
+    print("KẾT QUẢ ĐÁNH GIÁ TRÊN TẬP VALIDATION")
     print("="*50)
-    print(f"Độ chính xác tổng thể (Overall Accuracy): {acc * 100:.2f}%")
+    print(f"Độ chính xác Validation (Accuracy): {val_acc * 100:.2f}%")
+    print("\nBáo cáo chi tiết tập Validation (Classification Report):")
+    print(classification_report(y_val, y_val_pred))
+    print("Ma trận nhầm lẫn Validation (Confusion Matrix):")
+    print(confusion_matrix(y_val, y_val_pred))
+
+    # 2. Đánh giá trên tập Test độc lập
+    y_test_pred = rf_clf.predict(X_test)
+    test_acc = accuracy_score(y_test, y_test_pred)
+    print("\n" + "="*50)
+    print("KẾT QUẢ ĐÁNH GIÁ TRÊN TẬP TEST (KIỂM TRA ĐỘC LẬP)")
+    print("="*50)
+    print(f"Độ chính xác tổng thể Test (Overall Accuracy): {test_acc * 100:.2f}%")
     if hasattr(rf_clf, "oob_score_"):
         print(f"Điểm Out-Of-Bag (OOB Score): {rf_clf.oob_score_ * 100:.2f}%")
 
-    print("\nBáo cáo chi tiết từng lớp (Classification Report):")
-    print(classification_report(y_test, y_pred))
-
-    print("Ma trận nhầm lẫn (Confusion Matrix):")
-    print(confusion_matrix(y_test, y_pred))
+    print("\nBáo cáo chi tiết tập Test (Classification Report):")
+    print(classification_report(y_test, y_test_pred))
+    print("Ma trận nhầm lẫn tập Test (Confusion Matrix):")
+    print(confusion_matrix(y_test, y_test_pred))
 
     return rf_clf
 
@@ -326,12 +351,14 @@ def main():
         class_col=CLASS_COLUMN_NAME
     )
 
-    # 2. Huấn luyện Random Forest và đánh giá độ chính xác
+    # 2. Huấn luyện Random Forest và đánh giá độ chính xác (70% Train - 15% Val - 15% Test)
     rf_model = train_random_forest(
         X=X,
         y=y,
         n_estimators=100,
-        test_size=0.2,
+        train_ratio=0.70,
+        val_ratio=0.15,
+        test_ratio=0.15,
         random_state=42
     )
 
