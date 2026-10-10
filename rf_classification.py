@@ -292,13 +292,13 @@ def export_preview_image(raster_path, png_path=None):
     if png_path is None:
         png_path = os.path.splitext(raster_path)[0] + "_preview.png"
 
-    # Bảng màu đại diện cho các lớp chuẩn theo ArcMap
-    # 1: Rừng (xanh lá chuối / tươi), 7: Thủy hệ (xanh dương), 10: Dân cư (tím hồng), 14: Đất trống (vàng nhạt)
+    # Bảng màu đại diện cho các lớp theo ArcMap:
+    # 1: Thủy hệ (Xanh lam), 7: Thực vật / Rừng (Xanh lá), 10: Đất trống / NN (Vàng), 14: Đô thị / Dân cư (Tím hồng)
     color_map = {
-        1: [76, 230, 0],       # Rừng (Xanh lá sáng / Lime Green)
-        7: [0, 112, 255],      # Thủy hệ (Xanh dương)
-        10: [223, 115, 255],   # Dân cư (Tím hồng / Orchid - giống ArcMap)
-        14: [255, 255, 115],   # Đất trống (Vàng chanh)
+        1: [0, 112, 255],      # Thủy hệ (Xanh lam / Xanh dương)
+        7: [76, 230, 0],       # Rừng / Thực vật (Xanh lá)
+        10: [255, 255, 115],   # Đất trống / Đất nông nghiệp (Vàng)
+        14: [223, 115, 255],   # Dân cư / Xây dựng (Tím hồng)
     }
 
     # 1. Tự động tạo file bảng màu .clr để ArcMap tự nhận đúng màu khi mở file TIF
