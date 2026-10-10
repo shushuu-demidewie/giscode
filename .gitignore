@@ -1,0 +1,6 @@
+# Bỏ qua tất cả mọi thứ trong thư mục
+*
+
+# Ngoại trừ các file code Python (và chính file .gitignore)
+!*.py
+!.gitignore

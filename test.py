@@ -20,20 +20,14 @@ from sklearn.metrics import accuracy_score, confusion_matrix, cohen_kappa_score
 # Tự động tạo lại file .shx nếu bị thiếu khi đọc Shapefile
 os.environ['SHAPE_RESTORE_SHX'] = 'YES'
 
-# Tự động định vị thư mục gốc của dự án (d:\testgis)
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+# Tự động định vị thư mục gốc của dự án
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Đường dẫn thư mục ảnh viễn thám và file Shapefile trên máy
-folder_path = os.path.join(BASE_DIR, 'datahanoi')
-shp_path = os.path.join(BASE_DIR, 'Dkt', 'DKT30.shp')
-xa_tif_path = os.path.join(BASE_DIR, 'data', 'longchoose1.tif')
-xa_shp_path = os.path.join(BASE_DIR, 'data', 'KQ_Tach01.shp')
-
-# Fallback nếu chạy ở thư mục khác hoặc đường dẫn cố định
-if not os.path.exists(folder_path):
-    folder_path = r'D:\testgis\datahanoi'
-if not os.path.exists(shp_path):
-    shp_path = r'D:\testgis\Dkt\DKT30.shp'
+folder_path = os.path.join(BASE_DIR, 'LC08_L2SP_127045_20260901_20260911_02_T1')
+shp_path = os.path.join(BASE_DIR, 'DKT', 'DKT.shp')
+xa_tif_path = os.path.join(BASE_DIR, 'data1', 'outExtractByMask1.tif')
+xa_shp_path = os.path.join(BASE_DIR, 'data1', 'kq_tach.shp')
 
 def get_band_path(band_name):
     # Tìm kiếm linh hoạt file ảnh tương ứng với kênh trong thư mục
