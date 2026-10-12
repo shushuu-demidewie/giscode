@@ -75,21 +75,29 @@ else:
     with rasterio.open(get_band_path('SR_B6')) as src: b6 = src.read(1).astype(float)
     with rasterio.open(get_band_path('SR_B7')) as src: b7 = src.read(1).astype(float)
 
-print("Đang tính toán các chỉ số chuyên sâu (NDVI, NDWI, NDBI)...")
+print("Đang tính toán bộ 4 chỉ số chuyên sâu (NDVI, NDBI, MNDWI, NDWI)...")
 np.seterr(divide='ignore', invalid='ignore')
 
-# Tính các chỉ số dựa trên B3 (Green), B4 (Red), B5 (NIR), B6 (SWIR1)
+# 1. NDVI: Đại diện cho sinh khối thực vật (NIR: B5, Red: B4)
 ndvi = np.nan_to_num((b5 - b4) / (b5 + b4), nan=0.0)
-ndwi = np.nan_to_num((b3 - b5) / (b3 + b5), nan=0.0)
+
+# 2. NDBI: Đại diện cho vật liệu nhân tạo, bê tông, đất khô (SWIR1: B6, NIR: B5)
 ndbi = np.nan_to_num((b6 - b5) / (b6 + b5), nan=0.0)
 
-# Gộp 10 kênh dữ liệu (7 quang học B1-B7 + 3 chỉ số) phục vụ mô hình
-stacked_image = np.stack((b1, b2, b3, b4, b5, b6, b7, ndvi, ndwi, ndbi))
+# 3. MNDWI: Đại diện cho thủy văn/mặt nước không bị lẫn công trình (Green: B3, SWIR1: B6)
+mndwi = np.nan_to_num((b3 - b6) / (b3 + b6), nan=0.0)
+
+# 4. NDWI: Đối chứng độ ẩm bề mặt / nước hở truyền thống (Green: B3, NIR: B5)
+ndwi = np.nan_to_num((b3 - b5) / (b3 + b5), nan=0.0)
+
+# Gộp 11 kênh dữ liệu (7 quang học B1-B7 + 4 chỉ số) phục vụ mô hình
+stacked_image = np.stack((b1, b2, b3, b4, b5, b6, b7, ndvi, ndbi, mndwi, ndwi))
 
 # Chuẩn bị dữ liệu hiển thị (áp dụng mặt nạ ranh giới xã để chỉ hiện đúng khuôn viên xã)
 ndvi_plot = ndvi.copy()
-ndwi_plot = ndwi.copy()
 ndbi_plot = ndbi.copy()
+mndwi_plot = mndwi.copy()
+ndwi_plot = ndwi.copy()
 
 if os.path.exists(xa_shp_path):
     print(f"-> Đang áp dụng mặt nạ ranh giới xã từ: {xa_shp_path}")
@@ -101,32 +109,39 @@ if os.path.exists(xa_shp_path):
 
     # Đặt các pixel ngoài ranh giới xã thành NaN để không hiển thị (trong suốt)
     ndvi_plot[~mask_xa] = np.nan
-    ndwi_plot[~mask_xa] = np.nan
     ndbi_plot[~mask_xa] = np.nan
+    mndwi_plot[~mask_xa] = np.nan
+    ndwi_plot[~mask_xa] = np.nan
 
-# Hiển thị biểu đồ 3 chỉ số phổ bằng matplotlib
+# Hiển thị biểu đồ 4 chỉ số phổ bằng matplotlib
 import matplotlib.pyplot as plt
 
-print("Đang hiển thị biểu đồ 3 chỉ số phổ của xã...")
-fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+print("Đang hiển thị biểu đồ 4 chỉ số phổ của xã...")
+fig, axes = plt.subplots(1, 4, figsize=(22, 5.5))
 
 # 1. NDVI (Thực vật - Thường dùng bảng màu xanh lá cây)
 im1 = axes[0].imshow(ndvi_plot, cmap='RdYlGn', vmin=-0.2, vmax=0.8)
-axes[0].set_title("Chỉ số thực vật (NDVI)")
+axes[0].set_title("1. Thực vật (NDVI)")
 axes[0].axis('off')
 fig.colorbar(im1, ax=axes[0], fraction=0.046, pad=0.04)
 
-# 2. NDWI (Mặt nước - Thường dùng bảng màu xanh dương)
-im2 = axes[1].imshow(ndwi_plot, cmap='Blues', vmin=-0.5, vmax=0.5)
-axes[1].set_title("Chỉ số nước (NDWI)")
+# 2. NDBI (Đô thị / Bê tông / Đất khô - Bảng màu coolwarm)
+im2 = axes[1].imshow(ndbi_plot, cmap='coolwarm', vmin=-0.5, vmax=0.5)
+axes[1].set_title("2. Xây dựng / Đất khô (NDBI)")
 axes[1].axis('off')
 fig.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
 
-# 3. NDBI (Đô thị / Đất xây dựng - Thường dùng bảng màu đỏ/cam/xám)
-im3 = axes[2].imshow(ndbi_plot, cmap='coolwarm', vmin=-0.5, vmax=0.5)
-axes[2].set_title("Chỉ số xây dựng (NDBI)")
+# 3. MNDWI (Mặt nước không lẫn công trình - Bảng màu Blues)
+im3 = axes[2].imshow(mndwi_plot, cmap='Blues', vmin=-0.5, vmax=0.5)
+axes[2].set_title("3. Mặt nước sạch công trình (MNDWI)")
 axes[2].axis('off')
 fig.colorbar(im3, ax=axes[2], fraction=0.046, pad=0.04)
+
+# 4. NDWI (Độ ẩm bề mặt / Nước hở truyền thống - Bảng màu GnBu)
+im4 = axes[3].imshow(ndwi_plot, cmap='GnBu', vmin=-0.5, vmax=0.5)
+axes[3].set_title("4. Nước hở truyền thống (NDWI)")
+axes[3].axis('off')
+fig.colorbar(im4, ax=axes[3], fraction=0.046, pad=0.04)
 
 plt.tight_layout()
 plt.show()
