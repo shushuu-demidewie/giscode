@@ -27,37 +27,57 @@ from sklearn.metrics import classification_report, confusion_matrix, accuracy_sc
 import joblib
 
 
-# ==============================================================================
+# ---------------------------------
 # CẤU HÌNH ĐƯỜNG DẪN FILE DỮ LIỆU CÓ SẴN TRONG MÁY
-# ==============================================================================
-# Tự động định vị thư mục gốc dự án (d:\testgis)
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+# ---------------------------------
+# Tự động định vị thư mục gốc dự án (d:\User\Desktop\giscode)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 1. Đường dẫn ảnh GeoTIFF đầu vào (ảnh Landsat 7 kênh cắt từ khu vực Hà Nội)
-IMAGE_PATH = os.path.join(BASE_DIR, 'datahanoi', 'anhcat.tif')
+# 1. Đường dẫn ảnh GeoTIFF đầu vào
+IMAGE_PATH = os.path.join(BASE_DIR, 'data', 'outExtractByMask1.tif')
 
-# Fallback nếu chuyển sang thư mục DLGIS
+# Fallback nếu chuyển sang thư mục khác
 if not os.path.exists(IMAGE_PATH):
-    fallback_img = r"D:\DLGIS\hanoi2026\datahanoi\anhcat01.tif"
+    fallback_img = r"D:\User\Desktop\giscode\data\outExtractByMask1.tif"
     if os.path.exists(fallback_img):
         IMAGE_PATH = fallback_img
 
 # 2. Đường dẫn file Shapefile (.shp) vùng mẫu trích xuất / số hóa từ ArcMap
-ROI_SHAPEFILE_PATH = os.path.join(BASE_DIR, 'Dkt', 'DKT30.shp')
+ROI_SHAPEFILE_PATH = os.path.join(BASE_DIR, 'DKT1', 'DKT.shp')
 
-# 3. Tên cột chứa mã loại / lớp phân loại trong bảng thuộc tính ArcMap (trong file DKT30 là 'Nhan')
+# 3. Tên cột chứa mã loại / lớp phân loại trong bảng thuộc tính ArcMap
 CLASS_COLUMN_NAME = "Nhan"
 
 # 4. Đường dẫn lưu ảnh kết quả phân loại (GeoTIFF)
 OUTPUT_RASTER_PATH = os.path.join(BASE_DIR, 'data', 'anh_phan_loai_rf.tif')
 
 # 5. Đường dẫn lưu mô hình Random Forest sau khi huấn luyện (tùy chọn)
-MODEL_SAVE_PATH = os.path.join(BASE_DIR, 'giscode', 'rf_model.pkl')
+MODEL_SAVE_PATH = os.path.join(BASE_DIR, 'rf_model.pkl')
 
 
-# ==============================================================================
+# HÀM BỔ TRỢ: TÍNH TOÁN CÁC CHỈ SỐ CHUYÊN SÂU (NDVI, NDWI, MNDWI, NDBI)
+def add_spectral_indices(pixels):
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pixels = pixels.astype(float)
+
+        b3 = pixels[:, 2]
+        b4 = pixels[:, 3]
+        b5 = pixels[:, 4]
+        b6 = pixels[:, 5]
+
+        ndvi = np.nan_to_num((b5 - b4) / (b5 + b4), nan=0.0)
+        ndwi = np.nan_to_num((b3 - b5) / (b3 + b5), nan=0.0)
+        mndwi = np.nan_to_num((b3 - b6) / (b3 + b6), nan=0.0)
+        ndbi = np.nan_to_num((b6 - b5) / (b6 + b5), nan=0.0)
+
+        return np.column_stack((pixels, ndvi, ndwi, mndwi, ndbi))
+
+
+# ---------------------------------
 # BƯỚC 1: TRÍCH XUẤT MẪU ĐẶC TRƯNG TỪ SHAPEFILE VÀ ẢNH TIF
-# ==============================================================================
+# ---------------------------------
 def extract_training_data(image_path, roi_path, class_col):
     """
     Trích xuất giá trị phổ (pixel values) từ các mẫu POINT (Điểm) hoặc POLYGON (Vùng đa giác).
@@ -72,20 +92,33 @@ def extract_training_data(image_path, roi_path, class_col):
     print(f"[*] Đang đọc Shapefile mẫu huấn luyện: {roi_path}")
     roi_gdf = gpd.read_file(roi_path)
 
-    if class_col not in roi_gdf.columns:
+    # Tìm đúng cột có nhiều hơn 1 lớp
+    if class_col not in roi_gdf.columns or roi_gdf[class_col].nunique() <= 1:
         for candidate in ["Nhan", "nhan", "NHAN", "label", "Classvalue", "Classname", "Id"]:
             if candidate in roi_gdf.columns and roi_gdf[candidate].nunique() > 1:
-                print(f"[*] Cột '{class_col}' không tồn tại, tự động chuyển sang cột: '{candidate}'")
+                print(f"[*] Tự động chuyển sang sử dụng cột nhãn: '{candidate}'")
                 class_col = candidate
                 break
         else:
-            raise ValueError(f"Không tìm thấy cột '{class_col}' trong Shapefile. Các cột hiện có: {list(roi_gdf.columns)}")
+            raise ValueError(f"Không tìm thấy cột nào có trên 1 lớp. Các cột hiện có: {list(roi_gdf.columns)}")
 
     X_list = []
     y_list = []
 
     with rasterio.open(image_path) as src:
         # Tự động đồng bộ hệ tọa độ (CRS) giữa Shapefile và ảnh nếu khác nhau
+        if roi_gdf.crs is None:
+            # Lấy tọa độ điểm đầu tiên để phán đoán
+            geom = roi_gdf.geometry.iloc[0]
+            x0, y0 = (geom.x, geom.y) if geom.geom_type == 'Point' else (geom.centroid.x, geom.centroid.y)
+            
+            if -180 <= x0 <= 180 and -90 <= y0 <= 90:
+                print("[*] Shapefile không có CRS, nhưng tọa độ nằm trong khoảng -180 đến 180 (độ). Tự động gán WGS84 (EPSG:4326).")
+                roi_gdf.set_crs(epsg=4326, inplace=True)
+            else:
+                print(f"[*] Shapefile không có CRS và tọa độ là hệ mét. Tự động gán CRS của ảnh: {src.crs}")
+                roi_gdf.set_crs(src.crs, inplace=True)
+
         if roi_gdf.crs != src.crs:
             print(f"[*] Chuyển đổi hệ quy chiếu của Shapefile ({roi_gdf.crs}) sang của ảnh ({src.crs})...")
             roi_gdf = roi_gdf.to_crs(src.crs)
@@ -140,6 +173,7 @@ def extract_training_data(image_path, roi_path, class_col):
         raise ValueError("Không trích xuất được pixel mẫu nào! Hãy kiểm tra lại độ trùng khớp tọa độ giữa ảnh và shapefile.")
 
     X = np.vstack(X_list)
+    X = add_spectral_indices(X)
     y = np.concatenate(y_list)
 
     print(f"[+] Trích xuất thành công {X.shape[0]} điểm mẫu với {X.shape[1]} kênh phổ.")
@@ -150,37 +184,59 @@ def extract_training_data(image_path, roi_path, class_col):
     return X, y
 
 
-# ==============================================================================
+# ---------------------------------
 # BƯỚC 2: HUẤN LUYỆN VÀ ĐÁNH GIÁ THUẬT TOÁN RANDOM FOREST
-# ==============================================================================
+# ---------------------------------
 def train_random_forest(X, y, n_estimators=100, max_depth=None, test_size=0.2, random_state=42):
     """
     Chia tập train/test, huấn luyện Random Forest và in báo cáo độ chính xác.
     """
-    print("\n[*] Đang chia tập dữ liệu Train / Test...")
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state, stratify=y
+    print("\n[*] Đang chia tập dữ liệu Train / Val / Test (70% - 15% - 15%)...")
+    X_train, X_temp, y_train, y_temp = train_test_split(
+        X, y, test_size=0.30, random_state=random_state, stratify=y
     )
+    X_val, X_test, y_val, y_test = train_test_split(
+        X_temp, y_temp, test_size=0.50, random_state=random_state, stratify=y_temp
+    )
+
+    print(f"[*] Phân bổ: Train: {len(X_train)} | Val: {len(X_val)} | Test: {len(X_test)}")
+    
+    print("[*] Đang chuẩn hóa dữ liệu (StandardScaler)...")
+    from sklearn.preprocessing import StandardScaler
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_val = scaler.transform(X_val)
+    X_test = scaler.transform(X_test)
 
     print(f"[*] Đang huấn luyện Random Forest ({n_estimators} cây)...")
     rf_clf = RandomForestClassifier(
         n_estimators=n_estimators,
         max_depth=max_depth,
-        n_jobs=-1,  # Sử dụng tối đa tất cả các nhân CPU để tăng tốc
+        n_jobs=-1,
         random_state=random_state,
         oob_score=True
     )
     rf_clf.fit(X_train, y_train)
 
-    # Đánh giá trên tập kiểm tra độc lập
+    # Đánh giá trên tập Validation
+    val_pred = rf_clf.predict(X_val)
+    val_acc = accuracy_score(y_val, val_pred)
+
+    # Đánh giá trên tập kiểm tra độc lập (Test)
     y_pred = rf_clf.predict(X_test)
     acc = accuracy_score(y_test, y_pred)
+    
+    from sklearn.metrics import cohen_kappa_score
+    kappa = cohen_kappa_score(y_test, y_pred)
+    
     print("\n" + "="*50)
     print("KẾT QUẢ ĐÁNH GIÁ MÔ HÌNH RANDOM FOREST")
     print("="*50)
-    print(f"Độ chính xác tổng thể (Overall Accuracy): {acc * 100:.2f}%")
+    print(f"Độ chính xác trên tập Validation (15%): {val_acc * 100:.2f}%")
+    print(f"Độ chính xác tổng thể trên tập Test (15%): {acc * 100:.2f}%")
+    print(f"Hệ số Kappa trên tập Test: {kappa:.4f}")
     if hasattr(rf_clf, "oob_score_"):
-        print(f"Điểm Out-Of-Bag (OOB Score): {rf_clf.oob_score_ * 100:.2f}%")
+        print(f"Điểm Out-Of-Bag (OOB Score - từ tập Train): {rf_clf.oob_score_ * 100:.2f}%\n")
 
     print("\nBáo cáo chi tiết từng lớp (Classification Report):")
     print(classification_report(y_test, y_pred))
@@ -188,13 +244,13 @@ def train_random_forest(X, y, n_estimators=100, max_depth=None, test_size=0.2, r
     print("Ma trận nhầm lẫn (Confusion Matrix):")
     print(confusion_matrix(y_test, y_pred))
 
-    return rf_clf
+    return rf_clf, scaler
 
 
-# ==============================================================================
+# ---------------------------------
 # BƯỚC 3: PHÂN LOẠI TOÀN BỘ ẢNH TIF VÀ XUẤT FILE GEOTIFF
-# ==============================================================================
-def classify_and_export_raster(image_path, model, output_path, block_size=1024):
+# ---------------------------------
+def classify_and_export_raster(image_path, model, scaler, output_path, block_size=1024):
     """
     Phân loại toàn bộ ảnh GeoTIFF theo từng khối (block) để tránh tràn bộ nhớ RAM (OOM)
     và xuất ra file GeoTIFF mới giữ nguyên tọa độ và hệ quy chiếu (CRS).
@@ -247,8 +303,13 @@ def classify_and_export_raster(image_path, model, output_path, block_size=1024):
                     classified_block = np.full(reshaped.shape[0], -9999, dtype=np.int32)
 
                     if np.any(valid_mask):
-                        # Dự đoán nhãn cho các pixel hợp lệ
-                        classified_block[valid_mask] = model.predict(reshaped[valid_mask])
+                        # Lấy các pixel hợp lệ và tính thêm 4 chỉ số (7 kênh -> 11 kênh)
+                        valid_pixels = reshaped[valid_mask]
+                        valid_pixels_enhanced = add_spectral_indices(valid_pixels)
+                        # Chuẩn hóa (Scale) giống hệt lúc huấn luyện
+                        valid_pixels_enhanced = scaler.transform(valid_pixels_enhanced)
+                        # Dự đoán nhãn
+                        classified_block[valid_mask] = model.predict(valid_pixels_enhanced)
 
                     # Định hình lại thành (1, h_chunk, w_chunk) và ghi vào file GeoTIFF
                     classified_block = classified_block.reshape((1, h_chunk, w_chunk))
@@ -311,13 +372,13 @@ def export_preview_image(raster_path, png_path=None):
         print(f"[!] Không thể xuất ảnh xem trước: {e}")
 
 
-# ==============================================================================
+# ---------------------------------
 # HÀM THỰC THI CHÍNH
-# ==============================================================================
+# ---------------------------------
 def main():
-    print("==========================================================")
+    print("--------------------------------------------------")
     print("    QUY TRÌNH PHÂN LOẠI RANDOM FOREST ẢNH VIỄN THÁM")
-    print("==========================================================")
+    print("--------------------------------------------------")
 
     # 1. Trích xuất mẫu từ ảnh và Shapefile
     X, y = extract_training_data(
@@ -327,7 +388,7 @@ def main():
     )
 
     # 2. Huấn luyện Random Forest và đánh giá độ chính xác
-    rf_model = train_random_forest(
+    rf_model, scaler = train_random_forest(
         X=X,
         y=y,
         n_estimators=100,
@@ -344,6 +405,7 @@ def main():
     classify_and_export_raster(
         image_path=IMAGE_PATH,
         model=rf_model,
+        scaler=scaler,
         output_path=OUTPUT_RASTER_PATH,
         block_size=1024
     )

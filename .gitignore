@@ -1,0 +1,95 @@
+# ==========================================
+# GITIGNORE - DỰ ÁN VIỄN THÁM & GIS PYTHON
+# ==========================================
+
+# 1. Môi trường ảo Python (Virtual Environment)
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# 2. File tạm và Bytecode Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 3. Thư mục dữ liệu ảnh viễn thám & Shapefile nặng
+data/
+data1/
+DKT/
+DKT1/
+LC08_*/
+*.tar.gz
+*.zip
+*.rar
+*.7z
+
+# 4. Định dạng file ảnh Raster & GIS
+*.tif
+*.TIF
+*.tiff
+*.TIFF
+*.tfw
+*.ovr
+*.aux.xml
+*.clr
+*.vat.dbf
+*.vat.cpg
+
+# 5. Định dạng file Vector / Shapefile
+*.shp
+*.shx
+*.dbf
+*.prj
+*.sbn
+*.sbx
+*.cpg
+*.qix
+*.kml
+*.kmz
+*.geojson
+
+# 6. File mô hình học máy (Machine Learning Models)
+*.pkl
+*.pickle
+*.joblib
+rf_model.pkl
+
+# 7. File ảnh xuất xem trước & đồ thị tạm
+*.png
+*.jpg
+*.jpeg
+*.pdf
+anh_phan_loai_rf_preview.png
+
+# 8. Cấu hình IDE & Trình soạn thảo
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.agents/
+.ipynb_checkpoints/
+
+# 9. File hệ thống & Logs
+.DS_Store
+Thumbs.db
+*.log

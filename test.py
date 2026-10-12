@@ -15,25 +15,25 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
-from sklearn.metrics import accuracy_score, confusion_matrix, cohen_kappa_score
+from sklearn.metrics import accuracy_score, confusion_matrix, cohen_kappa_score, classification_report, precision_score, recall_score, f1_score
 
 # Tự động tạo lại file .shx nếu bị thiếu khi đọc Shapefile
 os.environ['SHAPE_RESTORE_SHX'] = 'YES'
 
-# Tự động định vị thư mục gốc của dự án (d:\testgis)
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+# Tự động định vị thư mục gốc của dự án (d:\User\Desktop\giscode)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Đường dẫn thư mục ảnh viễn thám và file Shapefile trên máy
-folder_path = os.path.join(BASE_DIR, 'datahanoi')
-shp_path = os.path.join(BASE_DIR, 'Dkt', 'DKT30.shp')
-xa_tif_path = os.path.join(BASE_DIR, 'data', 'longchoose1.tif')
-xa_shp_path = os.path.join(BASE_DIR, 'data', 'KQ_Tach01.shp')
+folder_path = os.path.join(BASE_DIR, 'data')
+shp_path = os.path.join(BASE_DIR, 'DKT1', 'DKT.shp')
+xa_tif_path = os.path.join(BASE_DIR, 'data', 'outExtractByMask1.tif')
+xa_shp_path = os.path.join(BASE_DIR, 'data', 'Export_Output.shp')
 
 # Fallback nếu chạy ở thư mục khác hoặc đường dẫn cố định
 if not os.path.exists(folder_path):
-    folder_path = r'D:\testgis\datahanoi'
+    folder_path = r'D:\User\Desktop\giscode\data'
 if not os.path.exists(shp_path):
-    shp_path = r'D:\testgis\Dkt\DKT30.shp'
+    shp_path = r'D:\User\Desktop\giscode\DKT1\DKT.shp'
 
 def get_band_path(band_name):
     # Tìm kiếm linh hoạt file ảnh tương ứng với kênh trong thư mục
@@ -75,20 +75,22 @@ else:
     with rasterio.open(get_band_path('SR_B6')) as src: b6 = src.read(1).astype(float)
     with rasterio.open(get_band_path('SR_B7')) as src: b7 = src.read(1).astype(float)
 
-print("Đang tính toán các chỉ số chuyên sâu (NDVI, NDWI, NDBI)...")
+print("Đang tính toán các chỉ số chuyên sâu (NDVI, NDWI, MNDWI, NDBI) trực tiếp giống QGIS...")
 np.seterr(divide='ignore', invalid='ignore')
 
 # Tính các chỉ số dựa trên B3 (Green), B4 (Red), B5 (NIR), B6 (SWIR1)
 ndvi = np.nan_to_num((b5 - b4) / (b5 + b4), nan=0.0)
 ndwi = np.nan_to_num((b3 - b5) / (b3 + b5), nan=0.0)
+mndwi = np.nan_to_num((b3 - b6) / (b3 + b6), nan=0.0)
 ndbi = np.nan_to_num((b6 - b5) / (b6 + b5), nan=0.0)
 
-# Gộp 10 kênh dữ liệu (7 quang học B1-B7 + 3 chỉ số) phục vụ mô hình
-stacked_image = np.stack((b1, b2, b3, b4, b5, b6, b7, ndvi, ndwi, ndbi))
+# Gộp 11 kênh dữ liệu (7 quang học B1-B7 đã chuẩn hóa + 4 chỉ số phổ) phục vụ mô hình
+stacked_image = np.stack((b1, b2, b3, b4, b5, b6, b7, ndvi, ndwi, mndwi, ndbi))
 
 # Chuẩn bị dữ liệu hiển thị (áp dụng mặt nạ ranh giới xã để chỉ hiện đúng khuôn viên xã)
 ndvi_plot = ndvi.copy()
 ndwi_plot = ndwi.copy()
+mndwi_plot = mndwi.copy()
 ndbi_plot = ndbi.copy()
 
 if os.path.exists(xa_shp_path):
@@ -102,31 +104,51 @@ if os.path.exists(xa_shp_path):
     # Đặt các pixel ngoài ranh giới xã thành NaN để không hiển thị (trong suốt)
     ndvi_plot[~mask_xa] = np.nan
     ndwi_plot[~mask_xa] = np.nan
+    mndwi_plot[~mask_xa] = np.nan
     ndbi_plot[~mask_xa] = np.nan
 
-# Hiển thị biểu đồ 3 chỉ số phổ bằng matplotlib
+# Hiển thị biểu đồ 4 chỉ số phổ bằng matplotlib
 import matplotlib.pyplot as plt
 
-print("Đang hiển thị biểu đồ 3 chỉ số phổ của xã...")
-fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+print("Đang hiển thị biểu đồ 4 chỉ số phổ của xã...")
 
-# 1. NDVI (Thực vật - Thường dùng bảng màu xanh lá cây)
-im1 = axes[0].imshow(ndvi_plot, cmap='RdYlGn', vmin=-0.2, vmax=0.8)
-axes[0].set_title("Chỉ số thực vật (NDVI)")
+# Tính toán giá trị Min / Max thực tế của từng chỉ số trong ranh giới xã
+def get_stats(arr):
+    valid = arr[~np.isnan(arr)]
+    if len(valid) == 0:
+        return -0.5, 0.5
+    return float(np.nanmin(valid)), float(np.nanmax(valid))
+
+ndvi_min, ndvi_max = get_stats(ndvi_plot)
+ndwi_min, ndwi_max = get_stats(ndwi_plot)
+mndwi_min, mndwi_max = get_stats(mndwi_plot)
+ndbi_min, ndbi_max = get_stats(ndbi_plot)
+
+fig, axes = plt.subplots(1, 4, figsize=(13, 3.6))
+
+# 1. NDVI (Thực vật)
+im1 = axes[0].imshow(ndvi_plot, cmap='RdYlGn', vmin=ndvi_min, vmax=ndvi_max)
+axes[0].set_title(f"1. NDVI (Thực vật)\n[{ndvi_min:.2f} đến {ndvi_max:.2f}]", fontsize=9, fontweight='bold')
 axes[0].axis('off')
-fig.colorbar(im1, ax=axes[0], fraction=0.046, pad=0.04)
+fig.colorbar(im1, ax=axes[0], fraction=0.046, pad=0.03)
 
-# 2. NDWI (Mặt nước - Thường dùng bảng màu xanh dương)
-im2 = axes[1].imshow(ndwi_plot, cmap='Blues', vmin=-0.5, vmax=0.5)
-axes[1].set_title("Chỉ số nước (NDWI)")
+# 2. NDWI (Mặt nước tiêu chuẩn)
+im2 = axes[1].imshow(ndwi_plot, cmap='Blues', vmin=ndwi_min, vmax=ndwi_max)
+axes[1].set_title(f"2. NDWI (Nước TC)\n[{ndwi_min:.2f} đến {ndwi_max:.2f}]", fontsize=9, fontweight='bold')
 axes[1].axis('off')
-fig.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
+fig.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.03)
 
-# 3. NDBI (Đô thị / Đất xây dựng - Thường dùng bảng màu đỏ/cam/xám)
-im3 = axes[2].imshow(ndbi_plot, cmap='coolwarm', vmin=-0.5, vmax=0.5)
-axes[2].set_title("Chỉ số xây dựng (NDBI)")
+# 3. MNDWI (Mặt nước tăng cường - Tách biệt đất xây dựng)
+im3 = axes[2].imshow(mndwi_plot, cmap='Blues', vmin=mndwi_min, vmax=mndwi_max)
+axes[2].set_title(f"3. MNDWI (Nước NC)\n[{mndwi_min:.2f} đến {mndwi_max:.2f}]", fontsize=9, fontweight='bold')
 axes[2].axis('off')
-fig.colorbar(im3, ax=axes[2], fraction=0.046, pad=0.04)
+fig.colorbar(im3, ax=axes[2], fraction=0.046, pad=0.03)
+
+# 4. NDBI (Đô thị / Đất xây dựng)
+im4 = axes[3].imshow(ndbi_plot, cmap='coolwarm', vmin=ndbi_min, vmax=ndbi_max)
+axes[3].set_title(f"4. NDBI (Xây dựng)\n[{ndbi_min:.2f} đến {ndbi_max:.2f}]", fontsize=9, fontweight='bold')
+axes[3].axis('off')
+fig.colorbar(im4, ax=axes[3], fraction=0.046, pad=0.03)
 
 plt.tight_layout()
 plt.show()
@@ -142,6 +164,19 @@ if not os.path.exists(shp_path):
         shp_path = alt
 
 samples = gpd.read_file(shp_path)
+
+if samples.crs is None:
+    # Lấy tọa độ điểm đầu tiên để phán đoán
+    geom = samples.geometry.iloc[0]
+    # Lấy tọa độ trung tâm hoặc tọa độ điểm
+    x0, y0 = (geom.x, geom.y) if geom.geom_type == 'Point' else (geom.centroid.x, geom.centroid.y)
+    
+    if -180 <= x0 <= 180 and -90 <= y0 <= 90:
+        print("-> Shapefile không có CRS, nhưng tọa độ nằm trong khoảng -180 đến 180 (độ). Tự động gán WGS84 (EPSG:4326).")
+        samples.set_crs(epsg=4326, inplace=True)
+    else:
+        print(f"-> Shapefile không có CRS và tọa độ là hệ mét. Tự động gán CRS của ảnh: {src_crs}")
+        samples.set_crs(src_crs, inplace=True)
 
 if samples.crs != src_crs:
     print(f"-> Đang đồng bộ hệ tọa độ từ {samples.crs} sang {src_crs}...")
@@ -244,13 +279,93 @@ print("\nĐang huấn luyện mô hình SVM...")
 svm_model = SVC(kernel='rbf', C=1.0, gamma='scale')
 svm_model.fit(X_train, y_train)
 
-print("\n--- KẾT QUẢ ĐÁNH GIÁ ---")
+print("\n--- KẾT QUẢ ĐÁNH GIÁ MÔ HÌNH SVM ---")
 val_preds = svm_model.predict(X_val)
 val_acc = accuracy_score(y_val, val_preds)
-print(f"Độ chính xác (Validation 15%): {val_acc * 100:.2f}%")
+print(f"Độ chính xác tổng thể (Validation 15%): {val_acc * 100:.2f}%")
 
 test_preds = svm_model.predict(X_test)
 test_acc = accuracy_score(y_test, test_preds)
 test_kappa = cohen_kappa_score(y_test, test_preds)
-print(f"Độ chính xác (Test 15%): {test_acc * 100:.2f}%")
+print(f"Độ chính xác tổng thể (Test 15%): {test_acc * 100:.2f}%")
 print(f"Hệ số Kappa (Test): {test_kappa:.4f}")
+
+#
+# 7. PHÂN TÍCH ĐỘ CHÍNH XÁC & MỐI QUAN HỆ GIỮA CHỈ SỐ NƯỚC VÀ XÂY DỰNG
+#
+print("\n" + "="*68)
+print("PHÂN TÍCH ĐỘ CHÍNH XÁC & TƯƠNG QUAN: CHỈ SỐ NƯỚC VS CHỈ SỐ XÂY DỰNG")
+print("="*68)
+
+# Lấy các chỉ số từ tập mẫu chưa chuẩn hóa (Kênh 8: NDWI, Kênh 9: MNDWI, Kênh 10: NDBI)
+raw_ndwi = X_balanced[:, 8]
+raw_mndwi = X_balanced[:, 9]
+raw_ndbi = X_balanced[:, 10]
+labels_unique = np.unique(y_balanced)
+
+# 1. Bảng giá trị trung bình từng chỉ số theo từng lớp phủ
+print("\n[1] GIÁ TRỊ TRUNG BÌNH CỦA CÁC CHỈ SỐ THEO TỪNG LỚP ĐẤT PHỦ:")
+print(f"{'Lớp (Label)':<18} | {'NDWI (Nước)':<14} | {'MNDWI (Nước TC)':<16} | {'NDBI (Xây dựng)':<16}")
+print("-" * 72)
+for lbl in sorted(labels_unique):
+    mask_lbl = (y_balanced == lbl)
+    lbl_name = f"Lớp {lbl}"
+    if 'Classname' in samples.columns and 'Classvalue' in samples.columns:
+        names = samples[samples['Classvalue'] == lbl]['Classname'].values
+        if len(names) > 0:
+            lbl_name = f"{names[0]} ({lbl})"
+    print(f"{lbl_name:<18} | {raw_ndwi[mask_lbl].mean():>14.4f} | {raw_mndwi[mask_lbl].mean():>16.4f} | {raw_ndbi[mask_lbl].mean():>16.4f}")
+
+# 2. Kiểm tra tương quan Pearson
+corr_ndwi_ndbi = np.corrcoef(raw_ndwi, raw_ndbi)[0, 1]
+corr_mndwi_ndbi = np.corrcoef(raw_mndwi, raw_ndbi)[0, 1]
+
+print("\n[2] HỆ SỐ TƯƠNG QUAN TUYẾN TÍNH (PEARSON CORRELATION r):")
+print(f"-> r(NDWI, NDBI)   = {corr_ndwi_ndbi:+.4f}")
+print(f"-> r(MNDWI, NDBI)  = {corr_mndwi_ndbi:+.4f}")
+print("\n[*] Giải thích vì sao KHÔNG tỷ lệ nghịch hoàn toàn:")
+print("    - Tại sao tưởng tỷ lệ nghịch: Về mặt logic đối tượng, Nước và Đất xây dựng là 2 thái cực.")
+print("    - Nhưng trong viễn thám: Phần lớn diện tích là RỪNG / THỰC VẬT. Ở vùng thực vật, kênh NIR (B5)")
+print("      rất lớn nằm ở mẫu số khiến cả NDWI và NDBI đều ÂM SÂU (cùng giảm), tạo tương quan đồng biến!")
+print("    - Hơn nữa, vật liệu xây dựng (bê tông, mái tôn) phản xạ mạnh ở cả Green và SWIR1 khiến NDWI")
+print("      và NDBI cùng mang giá trị dương ở đô thị. Chỉ có MNDWI mới dập tắt triệt để đất xây dựng.")
+
+# 3. Đánh giá độ chính xác độc lập của từng chỉ số khi phân tách lớp (ngưỡng chuẩn > 0)
+water_label = 7
+urban_label = 10
+for lbl in labels_unique:
+    if 'Classname' in samples.columns and 'Classvalue' in samples.columns:
+        names = samples[samples['Classvalue'] == lbl]['Classname'].values
+        if len(names) > 0:
+            cname = str(names[0]).lower()
+            if any(w in cname for w in ['thủy', 'thuy', 'nước', 'nuoc', 'water']): water_label = lbl
+            if any(u in cname for u in ['dân', 'dan', 'cư', 'cu', 'xây', 'xay', 'urban', 'built']): urban_label = lbl
+
+print("\n[3] ĐỘ CHÍNH XÁC PHÂN TÁCH ĐỘC LẬP TỪNG CHỈ SỐ (Ngưỡng phân tách chuẩn > 0):")
+y_water_true = (y_balanced == water_label).astype(int)
+y_ndwi_pred = (raw_ndwi > 0).astype(int)
+y_mndwi_pred = (raw_mndwi > 0).astype(int)
+
+y_urban_true = (y_balanced == urban_label).astype(int)
+y_ndbi_pred = (raw_ndbi > 0).astype(int)
+
+def print_metric(name, y_true, y_pred, target_name):
+    acc = accuracy_score(y_true, y_pred) * 100
+    prec = precision_score(y_true, y_pred, zero_division=0) * 100
+    rec = recall_score(y_true, y_pred, zero_division=0) * 100
+    f1 = f1_score(y_true, y_pred, zero_division=0) * 100
+    print(f"-> {name:<6} (nhận diện {target_name:<13}): Độ chính xác={acc:.2f}% | Precision={prec:.2f}% | Recall={rec:.2f}% | F1-Score={f1:.2f}%")
+
+print_metric("NDWI", y_water_true, y_ndwi_pred, "Mặt nước")
+print_metric("MNDWI", y_water_true, y_mndwi_pred, "Mặt nước")
+print_metric("NDBI", y_urban_true, y_ndbi_pred, "Đất xây dựng")
+
+# 4. Chi tiết phân loại của mô hình SVM cho từng lớp trên tập Test
+print("\n[4] BÁO CÁO ĐỘ CHÍNH XÁC CHI TIẾT TỪNG LỚP CỦA MÔ HÌNH SVM (Tập Test 15%):")
+target_names = [f"Lớp {l}" for l in sorted(labels_unique)]
+if 'Classname' in samples.columns and 'Classvalue' in samples.columns:
+    target_names = [samples[samples['Classvalue'] == l]['Classname'].values[0] if len(samples[samples['Classvalue'] == l]['Classname'].values) > 0 else f"Lớp {l}" for l in sorted(labels_unique)]
+
+print(classification_report(y_test, test_preds, target_names=target_names))
+print("Ma trận nhầm lẫn (Confusion Matrix):")
+print(confusion_matrix(y_test, test_preds))
