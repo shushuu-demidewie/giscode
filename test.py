@@ -115,35 +115,49 @@ if os.path.exists(xa_shp_path):
 
 # Hiển thị biểu đồ 4 chỉ số phổ bằng matplotlib
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 print("Đang hiển thị biểu đồ 4 chỉ số phổ của xã...")
+
+# Tự động trích xuất dải giá trị thực tế (bỏ qua NaN bên ngoài ranh giới xã)
+ndvi_min, ndvi_max = float(np.nanmin(ndvi_plot)), float(np.nanmax(ndvi_plot))
+ndwi_min, ndwi_max = float(np.nanmin(ndwi_plot)), float(np.nanmax(ndwi_plot))
+mndwi_min, mndwi_max = float(np.nanmin(mndwi_plot)), float(np.nanmax(mndwi_plot))
+ndbi_min, ndbi_max = float(np.nanmin(ndbi_plot)), float(np.nanmax(ndbi_plot))
+
 fig, axes = plt.subplots(1, 4, figsize=(22, 5.5))
 
-# 1. NDVI (Thực vật - Thường dùng bảng màu xanh lá cây)
-im1 = axes[0].imshow(ndvi_plot, cmap='RdYlGn', vmin=-0.2, vmax=0.8)
-axes[0].set_title("1. Thực vật (NDVI)")
+def add_colorbar_aligned(im, ax):
+    """Gắn colorbar vào đúng vị trí của subplot để chống đè lấn số liệu."""
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="5%", pad=0.08)
+    fig.colorbar(im, cax=cax)
+
+# 1. NDVI (Thực vật)
+im1 = axes[0].imshow(ndvi_plot, cmap='RdYlGn', vmin=ndvi_min, vmax=ndvi_max)
+axes[0].set_title(f"1. NDVI (Thực vật)\n[{ndvi_min:.2f} đến {ndvi_max:.2f}]", fontsize=9, fontweight='bold')
 axes[0].axis('off')
-fig.colorbar(im1, ax=axes[0], fraction=0.046, pad=0.04)
+add_colorbar_aligned(im1, axes[0])
 
-# 2. NDBI (Đô thị / Bê tông / Đất khô - Bảng màu coolwarm)
-im2 = axes[1].imshow(ndbi_plot, cmap='coolwarm', vmin=-0.5, vmax=0.5)
-axes[1].set_title("2. Xây dựng / Đất khô (NDBI)")
+# 2. NDWI (Mặt nước tiêu chuẩn)
+im2 = axes[1].imshow(ndwi_plot, cmap='Blues', vmin=ndwi_min, vmax=ndwi_max)
+axes[1].set_title(f"2. NDWI (Nước TC)\n[{ndwi_min:.2f} đến {ndwi_max:.2f}]", fontsize=9, fontweight='bold')
 axes[1].axis('off')
-fig.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
+add_colorbar_aligned(im2, axes[1])
 
-# 3. MNDWI (Mặt nước không lẫn công trình - Bảng màu Blues)
-im3 = axes[2].imshow(mndwi_plot, cmap='Blues', vmin=-0.5, vmax=0.5)
-axes[2].set_title("3. Mặt nước sạch công trình (MNDWI)")
+# 3. MNDWI (Mặt nước tăng cường - Tách biệt đất xây dựng)
+im3 = axes[2].imshow(mndwi_plot, cmap='Blues', vmin=mndwi_min, vmax=mndwi_max)
+axes[2].set_title(f"3. MNDWI (Nước NC)\n[{mndwi_min:.2f} đến {mndwi_max:.2f}]", fontsize=9, fontweight='bold')
 axes[2].axis('off')
-fig.colorbar(im3, ax=axes[2], fraction=0.046, pad=0.04)
+add_colorbar_aligned(im3, axes[2])
 
-# 4. NDWI (Độ ẩm bề mặt / Nước hở truyền thống - Bảng màu GnBu)
-im4 = axes[3].imshow(ndwi_plot, cmap='GnBu', vmin=-0.5, vmax=0.5)
-axes[3].set_title("4. Nước hở truyền thống (NDWI)")
+# 4. NDBI (Đô thị / Đất xây dựng)
+im4 = axes[3].imshow(ndbi_plot, cmap='coolwarm', vmin=ndbi_min, vmax=ndbi_max)
+axes[3].set_title(f"4. NDBI (Xây dựng)\n[{ndbi_min:.2f} đến {ndbi_max:.2f}]", fontsize=9, fontweight='bold')
 axes[3].axis('off')
-fig.colorbar(im4, ax=axes[3], fraction=0.046, pad=0.04)
+add_colorbar_aligned(im4, axes[3])
 
-plt.tight_layout()
+plt.tight_layout(pad=2.0)
 plt.show()
 
 #
