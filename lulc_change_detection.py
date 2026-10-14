@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-SCRIPT ĐÁNH GIÁ BIẾN ĐỘNG LỚP PHỦ MẶT ĐẤT (LULC CHANGE DETECTION) GIAI ĐOẠN 2020 - 2026
+SCRIPT ĐÁNH GIÁ BIẾN ĐỘNG LỚP PHỦ MẶT ĐẤT (LULC CHANGE DETECTION) GIAI ĐOẠN 2015 - 2026
 Thư viện sử dụng: rasterio, pandas, numpy, openpyxl
 Tác vụ:
-  1. Đọc và kiểm tra tính tương thích giữa 2 raster phân loại LULC (2020 và 2026).
+  1. Đọc và kiểm tra tính tương thích giữa 2 raster phân loại LULC (2015 và 2026).
   2. Trải phẳng mảng dữ liệu, định danh pixel_id và thực hiện INNER JOIN (pd.merge).
   3. Lọc bỏ NoData (<= 0, -9999).
   4. Lập ma trận chuyển đổi lớp phủ (Transition Matrix) theo số pixel và diện tích (ha).
@@ -51,15 +51,39 @@ pd.set_option('display.unicode.east_asian_width', True)
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
 # Đường dẫn dữ liệu đầu vào và đầu ra
-RASTER_2020_PATH = os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2020.tif')
-RASTER_2026_PATH = os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2026.tif')
-OUTPUT_EXCEL_PATH = os.path.join(BASE_DIR, 'data', 'bien_dong_lulc_2020_2026.xlsx')
+def find_raster_t1():
+    candidates = [
+        os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2015_std.tif'),
+        os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2015.tif'),
+        os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2020.tif')
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return candidates[0]
 
-# Bảng mã danh mục lớp phủ mặt đất (LULC)
+def find_raster_t2():
+    candidates = [
+        os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2026_std.tif'),
+        os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2026.tif')
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return candidates[0]
+
+YEAR_T1 = "2015"
+YEAR_T2 = "2026"
+
+RASTER_2015_PATH = find_raster_t1()
+RASTER_2026_PATH = find_raster_t2()
+OUTPUT_EXCEL_PATH = os.path.join(BASE_DIR, 'data', f'bien_dong_lulc_{YEAR_T1}_{YEAR_T2}.xlsx')
+
+# Bảng mã danh mục lớp phủ mặt đất (LULC) chuẩn hóa đồng bộ 4 lớp
 LULC_CLASSES = {
     1: "Đất mặt nước",
-    2: "Đất dân cư và giao thông",
-    3: "Đất công nghiệp",
+    2: "Đất dân cư và xây dựng",
+    3: "Đất nông nghiệp / Đất trống",
     4: "Thảm thực vật"
 }
 
@@ -73,18 +97,18 @@ PIXEL_AREA_HA = PIXEL_AREA_SQM / 10000.0         # 0.09 ha/pixel
 # ==============================================================================
 # HÀM HỖ TRỢ TẠO DỮ LIỆU MẪU (NẾU CHƯA CÓ FILE ĐẦU VÀO TRONG MÁY)
 # ==============================================================================
-def create_sample_rasters_if_missing(path_2020, path_2026):
+def create_sample_rasters_if_missing(path_2015, path_2026):
     """
-    Tự động tạo 2 file raster mẫu mô phỏng cho năm 2020 và 2026 nếu chưa tồn tại,
+    Tự động tạo 2 file raster mẫu mô phỏng cho năm 2015 và 2026 nếu chưa tồn tại,
     giúp người dùng có thể chạy thử nghiệm và kiểm chứng toàn bộ quy trình ngay lập tức.
     """
-    if os.path.exists(path_2020) and os.path.exists(path_2026):
+    if os.path.exists(path_2015) and os.path.exists(path_2026):
         return
 
     print("=" * 80)
-    print("THÔNG BÁO: Không tìm thấy file 2020 hoặc 2026 có sẵn.")
+    print("THÔNG BÁO: Không tìm thấy file 2015 hoặc 2026 có sẵn.")
     print("-> Đang tự động khởi tạo 2 file raster GeoTIFF mô phỏng thực tế...")
-    os.makedirs(os.path.dirname(path_2020), exist_ok=True)
+    os.makedirs(os.path.dirname(path_2015), exist_ok=True)
 
     # Thử lấy profile từ file có sẵn trong data/anh_phan_loai_rf.tif nếu có
     ref_file = os.path.join(BASE_DIR, 'data', 'anh_phan_loai_rf.tif')
@@ -100,35 +124,34 @@ def create_sample_rasters_if_missing(path_2020, path_2026):
 
     np.random.seed(42)
 
-    # Khởi tạo ma trận năm 2020:
-    # Tỷ lệ: Nước (1): 15%, Dân cư (2): 25%, Công nghiệp (3): 10%, Thảm thực vật (4): 50%
-    probs_2020 = [0.15, 0.25, 0.10, 0.50]
-    data_2020 = np.random.choice([1, 2, 3, 4], size=(height, width), p=probs_2020).astype(np.int32)
+    # Khởi tạo ma trận năm 2015:
+    probs_2015 = [0.15, 0.25, 0.10, 0.50]
+    data_2015 = np.random.choice([1, 2, 3, 4], size=(height, width), p=probs_2015).astype(np.int32)
 
     # Thêm vùng NoData viền ngoài
-    data_2020[:10, :] = -9999
-    data_2020[-10:, :] = -9999
-    data_2020[:, :10] = -9999
-    data_2020[:, -10:] = -9999
+    data_2015[:10, :] = -9999
+    data_2015[-10:, :] = -9999
+    data_2015[:, :10] = -9999
+    data_2015[:, -10:] = -9999
 
     # Khởi tạo ma trận năm 2026 mô phỏng quá trình đô thị hóa & công nghiệp hóa:
     # Phần lớn giữ nguyên, một phần thảm thực vật chuyển thành dân cư và công nghiệp
-    data_2026 = data_2020.copy()
-    valid_mask = data_2020 > 0
+    data_2026 = data_2015.copy()
+    valid_mask = data_2015 > 0
 
     # Chuyển đổi ngẫu nhiên có quy luật đô thị hóa
     change_rand = np.random.rand(height, width)
     # 25% thảm thực vật chuyển sang đất dân cư
-    veg_to_res = (data_2020 == 4) & (change_rand < 0.25) & valid_mask
+    veg_to_res = (data_2015 == 4) & (change_rand < 0.25) & valid_mask
     data_2026[veg_to_res] = 2
-    # 10% thảm thực vật chuyển sang đất công nghiệp
-    veg_to_ind = (data_2020 == 4) & (change_rand >= 0.25) & (change_rand < 0.35) & valid_mask
+    # 10% thảm thực vật chuyển sang đất công nghiệp / đất trống
+    veg_to_ind = (data_2015 == 4) & (change_rand >= 0.25) & (change_rand < 0.35) & valid_mask
     data_2026[veg_to_ind] = 3
-    # 5% đất dân cư mở rộng thành đất công nghiệp
-    res_to_ind = (data_2020 == 2) & (change_rand < 0.05) & valid_mask
+    # 5% đất dân cư mở rộng thành đất xây dựng khác
+    res_to_ind = (data_2015 == 2) & (change_rand < 0.05) & valid_mask
     data_2026[res_to_ind] = 3
     # 5% đất mặt nước bị san lấp làm dân cư
-    wat_to_res = (data_2020 == 1) & (change_rand < 0.05) & valid_mask
+    wat_to_res = (data_2015 == 1) & (change_rand < 0.05) & valid_mask
     data_2026[wat_to_res] = 2
 
     # Lưu 2 file GeoTIFF
@@ -144,10 +167,10 @@ def create_sample_rasters_if_missing(path_2020, path_2026):
         'compress': 'lzw'
     }
 
-    if not os.path.exists(path_2020):
-        with rasterio.open(path_2020, 'w', **meta) as dst:
-            dst.write(data_2020, 1)
-        print(f" -> Đã khởi tạo file 2020 mẫu: {path_2020}")
+    if not os.path.exists(path_2015):
+        with rasterio.open(path_2015, 'w', **meta) as dst:
+            dst.write(data_2015, 1)
+        print(f" -> Đã khởi tạo file 2015 mẫu: {path_2015}")
 
     if not os.path.exists(path_2026):
         with rasterio.open(path_2026, 'w', **meta) as dst:
@@ -159,7 +182,7 @@ def create_sample_rasters_if_missing(path_2020, path_2026):
 # ==============================================================================
 # BƯỚC 1: ĐỌC DỮ LIỆU RASTER VÀ KIỂM TRA TƯƠNG THÍCH KHÔNG GIAN
 # ==============================================================================
-def read_and_validate_rasters(path_2020, path_2026):
+def read_and_validate_rasters(path_2015, path_2026):
     """
     Đọc 2 file raster, kiểm tra tính đồng nhất về kích thước (shape) và hệ tọa độ (CRS).
     """
@@ -167,17 +190,17 @@ def read_and_validate_rasters(path_2020, path_2026):
     print("BƯỚC 1: ĐỌC VÀ KIỂM TRA TÍNH ĐỒNG BỘ CỦA DỮ LIỆU RASTER")
     print("=" * 80)
 
-    if not os.path.exists(path_2020):
-        raise FileNotFoundError(f"LỖI: Không tìm thấy file 2020 tại: {path_2020}")
+    if not os.path.exists(path_2015):
+        raise FileNotFoundError(f"LỖI: Không tìm thấy file 2015 tại: {path_2015}")
     if not os.path.exists(path_2026):
         raise FileNotFoundError(f"LỖI: Không tìm thấy file 2026 tại: {path_2026}")
 
-    with rasterio.open(path_2020) as src_2020, rasterio.open(path_2026) as src_2026:
-        print(f"[*] File 2020: {path_2020}")
-        print(f"    - Kích thước (Cao x Rộng): {src_2020.height} x {src_2020.width} pixels")
-        print(f"    - Hệ tọa độ (CRS): {src_2020.crs}")
-        print(f"    - Độ phân giải pixel: {src_2020.res[0]:.2f}m x {abs(src_2020.res[1]):.2f}m")
-        print(f"    - Giá trị NoData: {src_2020.nodata}")
+    with rasterio.open(path_2015) as src_2015, rasterio.open(path_2026) as src_2026:
+        print(f"[*] File 2015: {path_2015}")
+        print(f"    - Kích thước (Cao x Rộng): {src_2015.height} x {src_2015.width} pixels")
+        print(f"    - Hệ tọa độ (CRS): {src_2015.crs}")
+        print(f"    - Độ phân giải pixel: {src_2015.res[0]:.2f}m x {abs(src_2015.res[1]):.2f}m")
+        print(f"    - Giá trị NoData: {src_2015.nodata}")
 
         print(f"[*] File 2026: {path_2026}")
         print(f"    - Kích thước (Cao x Rộng): {src_2026.height} x {src_2026.width} pixels")
@@ -186,32 +209,32 @@ def read_and_validate_rasters(path_2020, path_2026):
         print(f"    - Giá trị NoData: {src_2026.nodata}")
 
         # Kiểm tra kích thước không gian
-        if (src_2020.height != src_2026.height) or (src_2020.width != src_2026.width):
+        if (src_2015.height != src_2026.height) or (src_2015.width != src_2026.width):
             raise ValueError(
                 f"LỖI: Kích thước 2 raster không khớp! "
-                f"2020 ({src_2020.height}x{src_2020.width}) vs 2026 ({src_2026.height}x{src_2026.width}). "
+                f"2015 ({src_2015.height}x{src_2015.width}) vs 2026 ({src_2026.height}x{src_2026.width}). "
                 f"Vui lòng resampling hoặc crop đồng bộ trước khi so sánh."
             )
 
         # Kiểm tra hệ quy chiếu (CRS)
-        if src_2020.crs != src_2026.crs:
+        if src_2015.crs != src_2026.crs:
             print("(!) CẢNH BÁO: Hệ quy chiếu (CRS) giữa 2 file không hoàn toàn trùng khớp!")
         else:
             print("[+] Kiểm tra tương thích: Kích thước và Hệ tọa độ 2 ảnh KHỚP HOÀN TOÀN.")
 
         # Đọc dữ liệu mảng band 1
-        arr_2020 = src_2020.read(1)
+        arr_2015 = src_2015.read(1)
         arr_2026 = src_2026.read(1)
-        nodata_2020 = src_2020.nodata
+        nodata_2015 = src_2015.nodata
         nodata_2026 = src_2026.nodata
 
-    return arr_2020, arr_2026, nodata_2020, nodata_2026
+    return arr_2015, arr_2026, nodata_2015, nodata_2026
 
 
 # ==============================================================================
 # BƯỚC 2: TRẢI PHẲNG MẢNG, ĐỊNH DANH PIXEL_ID VÀ THỰC HIỆN INNER JOIN
 # ==============================================================================
-def process_pixel_matching(arr_2020, arr_2026, nodata_2020, nodata_2026):
+def process_pixel_matching(arr_2015, arr_2026, nodata_2015, nodata_2026):
     """
     Trải phẳng 2 mảng raster, gán mã pixel_id, dùng pd.merge (INNER JOIN)
     và loại bỏ toàn bộ pixel NoData.
@@ -220,20 +243,20 @@ def process_pixel_matching(arr_2020, arr_2026, nodata_2020, nodata_2026):
     print("BƯỚC 2: TRẢI PHẲNG DỮ LIỆU & INNER JOIN THEO PIXEL_ID")
     print("=" * 80)
 
-    total_pixels = arr_2020.size
+    total_pixels = arr_2015.size
     print(f"[*] Tổng số lượng pixel raster ban đầu: {total_pixels:,} pixels")
 
     # Tạo chỉ mục không gian duy nhất cho từng pixel
     pixel_ids = np.arange(total_pixels, dtype=np.int64)
 
     # Trải phẳng mảng 2 chiều thành 1 chiều
-    flat_2020 = arr_2020.ravel()
+    flat_2015 = arr_2015.ravel()
     flat_2026 = arr_2026.ravel()
 
     # Xây dựng 2 DataFrame tương ứng 2 mốc thời gian
-    df_2020 = pd.DataFrame({
+    df_2015 = pd.DataFrame({
         'pixel_id': pixel_ids,
-        'code_2020': flat_2020
+        'code_2015': flat_2015
     })
 
     df_2026 = pd.DataFrame({
@@ -243,27 +266,33 @@ def process_pixel_matching(arr_2020, arr_2026, nodata_2020, nodata_2026):
 
     # Thực hiện thao tác INNER JOIN theo pixel_id giữa 2 mốc thời gian
     print("[*] Đang thực hiện INNER JOIN (pd.merge with how='inner')...")
-    df_merged = pd.merge(df_2020, df_2026, on='pixel_id', how='inner')
+    df_merged = pd.merge(df_2015, df_2026, on='pixel_id', how='inner')
 
     # Định nghĩa điều kiện lọc bỏ NoData:
-    # 1. Giá trị <= 0
-    # 2. Giá trị bằng -9999
-    # 3. Giá trị bằng nodata được ghi trong metadata raster
     valid_condition = (
-        (df_merged['code_2020'] > 0) &
-        (df_merged['code_2020'] != -9999) &
+        (df_merged['code_2015'] > 0) &
+        (df_merged['code_2015'] != -9999) &
         (df_merged['code_2026'] > 0) &
         (df_merged['code_2026'] != -9999)
     )
 
-    if nodata_2020 is not None:
-        valid_condition &= (df_merged['code_2020'] != nodata_2020)
+    if nodata_2015 is not None:
+        valid_condition &= (df_merged['code_2015'] != nodata_2015)
     if nodata_2026 is not None:
         valid_condition &= (df_merged['code_2026'] != nodata_2026)
 
+    # Tự động ánh xạ các mã lớp gốc (nếu dùng file TIF chưa qua chuẩn hóa):
+    # 2015: 14 (Xây dựng -> 2), 10 (Nông nghiệp/Đất trống -> 3), 22 (Cây xanh -> 4)
+    # 2026: 13 (Xây dựng -> 2), 10 (Nông nghiệp/Đất trống -> 3), 19 (Cây xanh -> 4)
+    native_to_std_t1 = {1: 1, 14: 2, 10: 3, 22: 4}
+    native_to_std_t2 = {1: 1, 13: 2, 10: 3, 19: 4}
+
+    df_merged['code_2015'] = df_merged['code_2015'].replace(native_to_std_t1)
+    df_merged['code_2026'] = df_merged['code_2026'].replace(native_to_std_t2)
+
     # Chỉ giữ các pixel có mã nằm trong danh mục bảng mã lớp phủ quy định (1, 2, 3, 4)
     valid_classes = set(LULC_CLASSES.keys())
-    valid_condition &= df_merged['code_2020'].isin(valid_classes)
+    valid_condition &= df_merged['code_2015'].isin(valid_classes)
     valid_condition &= df_merged['code_2026'].isin(valid_classes)
 
     df_clean = df_merged[valid_condition].copy()
@@ -275,7 +304,7 @@ def process_pixel_matching(arr_2020, arr_2026, nodata_2020, nodata_2026):
           f"({(nodata_count/total_pixels)*100:.2f}%)")
 
     # Ánh xạ mã số sang tên nhãn tiếng Việt tương ứng
-    df_clean['Ten_2020'] = df_clean['code_2020'].map(LULC_CLASSES)
+    df_clean['Ten_2015'] = df_clean['code_2015'].map(LULC_CLASSES)
     df_clean['Ten_2026'] = df_clean['code_2026'].map(LULC_CLASSES)
 
     return df_clean
@@ -287,7 +316,7 @@ def process_pixel_matching(arr_2020, arr_2026, nodata_2020, nodata_2026):
 def build_transition_matrix(df_clean, pixel_area_ha):
     """
     Tạo ma trận chuyển đổi lớp phủ (Cross-tabulation) dạng pixel và hecta (ha).
-    Hàng: Năm 2020 (Nguồn chuyển dịch)
+    Hàng: Năm 2015 (Nguồn chuyển dịch)
     Cột: Năm 2026 (Đích chuyển dịch)
     """
     print("\n" + "=" * 80)
@@ -298,23 +327,23 @@ def build_transition_matrix(df_clean, pixel_area_ha):
 
     # Ma trận chuyển đổi theo số lượng pixel
     matrix_pixel = pd.crosstab(
-        index=df_clean['Ten_2020'],
+        index=df_clean['Ten_2015'],
         columns=df_clean['Ten_2026'],
-        rownames=['Lớp phủ năm 2020'],
-        colnames=['Lớp phủ năm 2026'],
+        rownames=[f'Lớp phủ năm {YEAR_T1}'],
+        colnames=[f'Lớp phủ năm {YEAR_T2}'],
         margins=True,
-        margins_name='Tổng 2020'
+        margins_name=f'Tổng {YEAR_T1}'
     )
 
     # Đảm bảo đầy đủ các lớp theo thứ tự mong muốn kể cả khi có lớp nhận giá trị 0
     matrix_pixel = matrix_pixel.reindex(
-        index=class_names + ['Tổng 2020'],
-        columns=class_names + ['Tổng 2020'],
+        index=class_names + [f'Tổng {YEAR_T1}'],
+        columns=class_names + [f'Tổng {YEAR_T1}'],
         fill_value=0
     )
 
-    # Đổi tên nhãn cột tổng thành 'Tổng 2020' và dòng tổng thành 'Tổng 2026' để người đọc dễ phân biệt
-    matrix_pixel.rename(index={'Tổng 2020': 'Tổng 2026'}, inplace=True)
+    # Đổi tên nhãn cột tổng thành 'Tổng T1' và dòng tổng thành 'Tổng T2' để người đọc dễ phân biệt
+    matrix_pixel.rename(index={f'Tổng {YEAR_T1}': f'Tổng {YEAR_T2}'}, inplace=True)
 
     # Ma trận chuyển đổi theo diện tích (Hecta - ha)
     matrix_ha = (matrix_pixel * pixel_area_ha).round(2)
@@ -328,7 +357,7 @@ def build_transition_matrix(df_clean, pixel_area_ha):
 def calculate_net_change(matrix_ha, class_names):
     """
     Tính bảng tổng hợp biến động ròng:
-      - Diện tích 2020, Diện tích 2026
+      - Diện tích T1, Diện tích T2
       - Ổn định (Persistence), Mất đi (Loss), Tăng thêm (Gain)
       - Chênh lệch biến động ròng (+/- ha)
       - Tỷ lệ phần trăm biến động (%)
@@ -340,20 +369,20 @@ def calculate_net_change(matrix_ha, class_names):
     summary_rows = []
 
     for c in class_names:
-        area_2020 = matrix_ha.loc[c, 'Tổng 2020']
-        area_2026 = matrix_ha.loc['Tổng 2026', c]
+        area_t1 = matrix_ha.loc[c, f'Tổng {YEAR_T1}']
+        area_t2 = matrix_ha.loc[f'Tổng {YEAR_T2}', c]
         persistence = matrix_ha.loc[c, c]  # Đường chéo chính: giữ nguyên lớp phủ
 
-        loss = area_2020 - persistence     # Diện tích năm 2020 chuyển sang lớp khác
-        gain = area_2026 - persistence     # Diện tích năm 2026 nhận thêm từ lớp khác
-        net_change = area_2026 - area_2020 # Biến động ròng = Gain - Loss
+        loss = area_t1 - persistence     # Diện tích năm T1 chuyển sang lớp khác
+        gain = area_t2 - persistence     # Diện tích năm T2 nhận thêm từ lớp khác
+        net_change = area_t2 - area_t1   # Biến động ròng = Gain - Loss
 
-        pct_change = (net_change / area_2020 * 100.0) if area_2020 > 0 else 0.0
+        pct_change = (net_change / area_t1 * 100.0) if area_t1 > 0 else 0.0
 
         summary_rows.append({
             'Lớp phủ mặt đất': c,
-            'Diện tích 2020 (ha)': round(area_2020, 2),
-            'Diện tích 2026 (ha)': round(area_2026, 2),
+            f'Diện tích {YEAR_T1} (ha)': round(area_t1, 2),
+            f'Diện tích {YEAR_T2} (ha)': round(area_t2, 2),
             'Giữ nguyên / Ổn định (ha)': round(persistence, 2),
             'Diện tích mất đi (ha)': round(loss, 2),
             'Diện tích tăng thêm (ha)': round(gain, 2),
@@ -364,8 +393,8 @@ def calculate_net_change(matrix_ha, class_names):
     df_summary = pd.DataFrame(summary_rows)
 
     # Thêm dòng Tổng cộng
-    total_2020 = df_summary['Diện tích 2020 (ha)'].sum()
-    total_2026 = df_summary['Diện tích 2026 (ha)'].sum()
+    total_t1 = df_summary[f'Diện tích {YEAR_T1} (ha)'].sum()
+    total_t2 = df_summary[f'Diện tích {YEAR_T2} (ha)'].sum()
     total_persistence = df_summary['Giữ nguyên / Ổn định (ha)'].sum()
     total_loss = df_summary['Diện tích mất đi (ha)'].sum()
     total_gain = df_summary['Diện tích tăng thêm (ha)'].sum()
@@ -373,8 +402,8 @@ def calculate_net_change(matrix_ha, class_names):
 
     total_row = pd.DataFrame([{
         'Lớp phủ mặt đất': 'TỔNG CỘNG',
-        'Diện tích 2020 (ha)': round(total_2020, 2),
-        'Diện tích 2026 (ha)': round(total_2026, 2),
+        f'Diện tích {YEAR_T1} (ha)': round(total_t1, 2),
+        f'Diện tích {YEAR_T2} (ha)': round(total_t2, 2),
         'Giữ nguyên / Ổn định (ha)': round(total_persistence, 2),
         'Diện tích mất đi (ha)': round(total_loss, 2),
         'Diện tích tăng thêm (ha)': round(total_gain, 2),
@@ -443,10 +472,10 @@ def export_to_excel(matrix_pixel, matrix_ha, df_summary_with_total, output_path)
         ws1.views.sheetView[0].showGridLines = True
 
         # Tiêu đề bảng 1
-        ws1['B2'] = "MA TRẬN CHUYỂN ĐỔI LỚP PHỦ MẶT ĐẤT GIAI ĐOẠN 2020 - 2026 (ĐƠN VỊ: HECTA - HA)"
+        ws1['B2'] = f"MA TRẬN CHUYỂN ĐỔI LỚP PHỦ MẶT ĐẤT GIAI ĐOẠN {YEAR_T1} - {YEAR_T2} (ĐƠN VỊ: HECTA - HA)"
         ws1['B2'].font = font_title
 
-        ws1[f'B{start_row_pixel - 1}'] = "MA TRẬN CHUYỂN ĐỔI LỚP PHỦ MẶT ĐẤT GIAI ĐOẠN 2020 - 2026 (ĐƠN VỊ: PIXEL)"
+        ws1[f'B{start_row_pixel - 1}'] = f"MA TRẬN CHUYỂN ĐỔI LỚP PHỦ MẶT ĐẤT GIAI ĐOẠN {YEAR_T1} - {YEAR_T2} (ĐƠN VỊ: PIXEL)"
         ws1[f'B{start_row_pixel - 1}'].font = font_section
 
         # Tô màu và viền cho Ma trận Hecta
@@ -518,7 +547,7 @@ def export_to_excel(matrix_pixel, matrix_ha, df_summary_with_total, output_path)
         ws2 = wb['Tong_hop_bien_dong']
         ws2.views.sheetView[0].showGridLines = True
 
-        ws2['B2'] = "BẢNG TỔNG HỢP BIẾN ĐỘNG RÒNG LỚP PHỦ MẶT ĐẤT (NET CHANGE) GIAI ĐOẠN 2020 - 2026"
+        ws2['B2'] = f"BẢNG TỔNG HỢP BIẾN ĐỘNG RÒNG LỚP PHỦ MẶT ĐẤT (NET CHANGE) GIAI ĐOẠN {YEAR_T1} - {YEAR_T2}"
         ws2['B2'].font = font_title
 
         sum_start_r = 4
@@ -578,22 +607,24 @@ def display_console_and_generate_insights(matrix_ha, df_summary, class_names):
     print("BƯỚC 6: KẾT QUẢ THỐNG KÊ & BÁO CÁO NHẬN XÉT BIẾN ĐỘNG")
     print("=" * 80)
 
-    print("\n--- 1. MA TRẬN CHUYỂN ĐỔI LỚP PHỦ 2020 - 2026 (ĐƠN VỊ: HECTA) ---")
-    print("(Hàng: Năm 2020 -> Cột: Năm 2026)")
+    print(f"\n--- 1. MA TRẬN CHUYỂN ĐỔI LỚP PHỦ {YEAR_T1} - {YEAR_T2} (ĐƠN VỊ: HECTA) ---")
+    print(f"(Hàng: Năm {YEAR_T1} -> Cột: Năm {YEAR_T2})")
     print(matrix_ha.to_string())
 
     print("\n--- 2. BẢNG TỔNG HỢP BIẾN ĐỘNG RÒNG (NET CHANGE SUMMARY) ---")
     print(df_summary.to_string(index=False))
 
     # --- TỰ ĐỘNG PHÂN TÍCH SỐ LIỆU ĐỂ SINH NHẬN XÉT ---
-    total_area_2020 = df_summary['Diện tích 2020 (ha)'].sum()
-    total_area_2026 = df_summary['Diện tích 2026 (ha)'].sum()
+    col_t1 = f'Diện tích {YEAR_T1} (ha)'
+    col_t2 = f'Diện tích {YEAR_T2} (ha)'
+    total_area_t1 = df_summary[col_t1].sum()
+    total_area_t2 = df_summary[col_t2].sum()
     total_persistence = df_summary['Giữ nguyên / Ổn định (ha)'].sum()
-    persistence_rate = (total_persistence / total_area_2020 * 100.0) if total_area_2020 > 0 else 0.0
+    persistence_rate = (total_persistence / total_area_t1 * 100.0) if total_area_t1 > 0 else 0.0
 
-    # Lớp phủ có độ ổn định nội tại cao nhất (% giữ nguyên trên tổng diện tích 2020 của chính nó)
-    stable_class = max(class_names, key=lambda c: matrix_ha.loc[c, c] / matrix_ha.loc[c, 'Tổng 2020'] if matrix_ha.loc[c, 'Tổng 2020'] > 0 else 0)
-    stable_rate = (matrix_ha.loc[stable_class, stable_class] / matrix_ha.loc[stable_class, 'Tổng 2020']) * 100.0
+    # Lớp phủ có độ ổn định nội tại cao nhất (% giữ nguyên trên tổng diện tích T1 của chính nó)
+    stable_class = max(class_names, key=lambda c: matrix_ha.loc[c, c] / matrix_ha.loc[c, f'Tổng {YEAR_T1}'] if matrix_ha.loc[c, f'Tổng {YEAR_T1}'] > 0 else 0)
+    stable_rate = (matrix_ha.loc[stable_class, stable_class] / matrix_ha.loc[stable_class, f'Tổng {YEAR_T1}']) * 100.0
 
     # Lớp phủ tăng trưởng ròng mạnh nhất
     top_gain_row = df_summary.loc[df_summary['Chênh lệch (+/- ha)'].idxmax()]
@@ -619,18 +650,18 @@ def display_console_and_generate_insights(matrix_ha, df_summary, class_names):
 
     insights = f"""
 1. TỔNG QUAN KHÔNG GIAN VÀ TÍNH ỔN ĐỊNH:
-   - Tổng diện tích khu vực nghiên cứu được theo dõi là {total_area_2020:,.2f} ha.
+   - Tổng diện tích khu vực nghiên cứu được theo dõi là {total_area_t1:,.2f} ha.
    - Tính ổn định của lớp phủ mặt đất (Persistence - đường chéo chính) đạt {total_persistence:,.2f} ha, 
-     tương đương {persistence_rate:.2f}% tổng diện tích tự nhiên giữ nguyên hiện trạng lớp phủ trong giai đoạn 2020 - 2026.
+     tương đương {persistence_rate:.2f}% tổng diện tích tự nhiên giữ nguyên hiện trạng lớp phủ trong giai đoạn {YEAR_T1} - {YEAR_T2}.
    - Lớp phủ có tính bền vững, ít bị chuyển đổi nhất là '{stable_class}' với tỷ lệ giữ nguyên đạt {stable_rate:.2f}%.
 
 2. XU HƯỚNG TĂNG TRƯỞNG & SUY GIẢM RÒNG (NET CHANGE):
    - Lớp phủ TĂNG MẠNH NHẤT: '{top_gain_row['Lớp phủ mặt đất']}' tăng thêm {top_gain_row['Chênh lệch (+/- ha)']:+,.2f} ha 
-     (tăng trưởng {top_gain_row['Tỷ lệ biến động (%)']:+.2f}% so với năm 2020), từ {top_gain_row['Diện tích 2020 (ha)']:,.2f} ha 
-     lên {top_gain_row['Diện tích 2026 (ha)']:,.2f} ha.
+     (tăng trưởng {top_gain_row['Tỷ lệ biến động (%)']:+.2f}% so với năm {YEAR_T1}), từ {top_gain_row[col_t1]:,.2f} ha 
+     lên {top_gain_row[col_t2]:,.2f} ha.
    - Lớp phủ SUY GIẢM MẠNH NHẤT: '{top_loss_row['Lớp phủ mặt đất']}' giảm {abs(top_loss_row['Chênh lệch (+/- ha)']):,.2f} ha 
-     (suy giảm {top_loss_row['Tỷ lệ biến động (%)']:+.2f}% so với năm 2020), từ {top_loss_row['Diện tích 2020 (ha)']:,.2f} ha 
-     xuống còn {top_loss_row['Diện tích 2026 (ha)']:,.2f} ha.
+     (suy giảm {top_loss_row['Tỷ lệ biến động (%)']:+.2f}% so với năm {YEAR_T1}), từ {top_loss_row[col_t1]:,.2f} ha 
+     xuống còn {top_loss_row[col_t2]:,.2f} ha.
 
 3. CÁC LUỒNG CHUYỂN DỊCH KHÔNG GIAN NỔI BẬT NHẤT:
    - Luồng biến động thứ nhất: Có {top_1_trans[2]:,.2f} ha từ '{top_1_trans[0]}' đã chuyển đổi thành '{top_1_trans[1]}'.
@@ -647,20 +678,20 @@ def display_console_and_generate_insights(matrix_ha, df_summary, class_names):
 # ==============================================================================
 def main():
     print("*" * 80)
-    print("CHƯƠNG TRÌNH PHÂN TÍCH BIẾN ĐỘNG LỚP PHỦ MẶT ĐẤT (LULC) 2020 - 2026")
+    print(f"CHƯƠNG TRÌNH PHÂN TÍCH BIẾN ĐỘNG LỚP PHỦ MẶT ĐẤT (LULC) {YEAR_T1} - {YEAR_T2}")
     print("Thư viện: rasterio | pandas | numpy | openpyxl")
     print("*" * 80)
 
     # 0. Tự động khởi tạo dữ liệu mô phỏng nếu người dùng chưa có sẵn 2 file tif
-    create_sample_rasters_if_missing(RASTER_2020_PATH, RASTER_2026_PATH)
+    create_sample_rasters_if_missing(RASTER_2015_PATH, RASTER_2026_PATH)
 
     # 1. Đọc và kiểm tra kích thước, hệ quy chiếu của 2 file raster
-    arr_2020, arr_2026, nodata_2020, nodata_2026 = read_and_validate_rasters(
-        RASTER_2020_PATH, RASTER_2026_PATH
+    arr_2015, arr_2026, nodata_2015, nodata_2026 = read_and_validate_rasters(
+        RASTER_2015_PATH, RASTER_2026_PATH
     )
 
     # 2. Trải phẳng mảng, gán pixel_id, INNER JOIN và lọc NoData
-    df_clean = process_pixel_matching(arr_2020, arr_2026, nodata_2020, nodata_2026)
+    df_clean = process_pixel_matching(arr_2015, arr_2026, nodata_2015, nodata_2026)
 
     # 3. Lập ma trận chuyển đổi lớp phủ (pixel & ha)
     matrix_pixel, matrix_ha, class_names = build_transition_matrix(df_clean, PIXEL_AREA_HA)
