@@ -60,7 +60,11 @@ try:
 except ImportError:
     HAS_MATPLOTLIB = False
 
-from PIL import Image
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
 
 
 # ==============================================================================
@@ -222,29 +226,34 @@ def plot_spectral_indices(b_indices, valid_mask, output_png, year):
         fig.colorbar(im, cax=cax)
 
     im1 = axes[0].imshow(ndvi_p, cmap='RdYlGn', vmin=float(np.nanmin(ndvi_p)), vmax=float(np.nanmax(ndvi_p)))
-    axes[0].set_title(f"1. NDVI {year} (Thực vật)\n[{np.nanmin(ndvi_p):.2f} ~ {np.nanmax(ndvi_p):.2f}]", fontsize=10, fontweight='bold')
+    axes[0].set_title(f"Chỉ số thực vật (NDVI) - Năm {year}", fontsize=11, fontweight='bold')
     axes[0].axis('off')
     add_cbar(im1, axes[0])
 
     im2 = axes[1].imshow(ndwi_p, cmap='Blues', vmin=float(np.nanmin(ndwi_p)), vmax=float(np.nanmax(ndwi_p)))
-    axes[1].set_title(f"2. NDWI {year} (Nước TC)\n[{np.nanmin(ndwi_p):.2f} ~ {np.nanmax(ndwi_p):.2f}]", fontsize=10, fontweight='bold')
+    axes[1].set_title(f"Chỉ số nước (NDWI) - Năm {year}", fontsize=11, fontweight='bold')
     axes[1].axis('off')
     add_cbar(im2, axes[1])
 
     im3 = axes[2].imshow(mndwi_p, cmap='Blues', vmin=float(np.nanmin(mndwi_p)), vmax=float(np.nanmax(mndwi_p)))
-    axes[2].set_title(f"3. MNDWI {year} (Nước NC)\n[{np.nanmin(mndwi_p):.2f} ~ {np.nanmax(mndwi_p):.2f}]", fontsize=10, fontweight='bold')
+    axes[2].set_title(f"Chỉ số nước tăng cường (MNDWI) - Năm {year}", fontsize=11, fontweight='bold')
     axes[2].axis('off')
     add_cbar(im3, axes[2])
 
     im4 = axes[3].imshow(ndbi_p, cmap='coolwarm', vmin=float(np.nanmin(ndbi_p)), vmax=float(np.nanmax(ndbi_p)))
-    axes[3].set_title(f"4. NDBI {year} (Xây dựng)\n[{np.nanmin(ndbi_p):.2f} ~ {np.nanmax(ndbi_p):.2f}]", fontsize=10, fontweight='bold')
+    axes[3].set_title(f"Chỉ số xây dựng (NDBI) - Năm {year}", fontsize=11, fontweight='bold')
     axes[3].axis('off')
     add_cbar(im4, axes[3])
 
     plt.tight_layout(pad=1.5)
     plt.savefig(output_png, dpi=300, bbox_inches='tight')
-    plt.close()
     print(f"[+] Đã lưu biểu đồ chỉ số phổ: {output_png}")
+    print(f"[*] Đang hiển thị cửa sổ biểu đồ 4 chỉ số phổ năm {year} (Hãy đóng cửa sổ hình ảnh Figure để tiếp tục)...")
+    try:
+        plt.show()
+    except Exception as e:
+        print(f"[!] Không thể mở cửa sổ hiển thị đồ họa: {e}")
+    plt.close()
 
 
 # ==============================================================================

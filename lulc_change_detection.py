@@ -50,11 +50,33 @@ pd.set_option('display.unicode.east_asian_width', True)
 # Định vị thư mục gốc của dự án (d:\testgis)
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
-# Đường dẫn dữ liệu đầu vào và đầu ra
-def find_raster_t1():
+# Nguồn dữ liệu phân loại đầu vào:
+#   'auto'   : Tự động ưu tiên file sẵn có (ArcMap pl_T2015v/pl_T2026, sau đó đến RF, SVM)
+#   'arcmap' : Dùng kết quả phân loại từ ArcMap (pl_T2015v.tif & pl_T2026.tif)
+#   'rf'     : Dùng kết quả phân loại Random Forest (anh_phan_loai_2015.tif & anh_phan_loai_2026.tif)
+#   'svm'    : Dùng kết quả phân loại SVM (anh_phan_loai_svm_2015.tif & anh_phan_loai_svm_2026.tif)
+DATA_SOURCE = 'auto'
+
+# Hỗ trợ truyền qua tham số dòng lệnh: python lulc_change_detection.py arcmap/rf/svm
+if len(sys.argv) > 1:
+    arg_src = sys.argv[1].strip().lower()
+    if arg_src in ['arcmap', 'rf', 'svm', 'auto']:
+        DATA_SOURCE = arg_src
+
+def find_raster_t1(source='auto'):
+    if source == 'arcmap':
+        return os.path.join(BASE_DIR, 'data', 'pl_T2015v.tif')
+    elif source == 'rf':
+        return os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2015.tif')
+    elif source == 'svm':
+        return os.path.join(BASE_DIR, 'data', 'anh_phan_loai_svm_2015.tif')
+
     candidates = [
-        os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2015_std.tif'),
+        os.path.join(BASE_DIR, 'data', 'pl_T2015v.tif'),
         os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2015.tif'),
+        os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2015_std.tif'),
+        os.path.join(BASE_DIR, 'data', 'anh_phan_loai_svm_2015.tif'),
+        os.path.join(BASE_DIR, 'data', 'anh_phan_loai_svm_2015_std.tif'),
         os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2020.tif')
     ]
     for c in candidates:
@@ -62,10 +84,20 @@ def find_raster_t1():
             return c
     return candidates[0]
 
-def find_raster_t2():
+def find_raster_t2(source='auto'):
+    if source == 'arcmap':
+        return os.path.join(BASE_DIR, 'data', 'pl_T2026.tif')
+    elif source == 'rf':
+        return os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2026.tif')
+    elif source == 'svm':
+        return os.path.join(BASE_DIR, 'data', 'anh_phan_loai_svm_2026.tif')
+
     candidates = [
+        os.path.join(BASE_DIR, 'data', 'pl_T2026.tif'),
+        os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2026.tif'),
         os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2026_std.tif'),
-        os.path.join(BASE_DIR, 'data', 'anh_phan_loai_2026.tif')
+        os.path.join(BASE_DIR, 'data', 'anh_phan_loai_svm_2026.tif'),
+        os.path.join(BASE_DIR, 'data', 'anh_phan_loai_svm_2026_std.tif')
     ]
     for c in candidates:
         if os.path.exists(c):
@@ -75,8 +107,8 @@ def find_raster_t2():
 YEAR_T1 = "2015"
 YEAR_T2 = "2026"
 
-RASTER_2015_PATH = find_raster_t1()
-RASTER_2026_PATH = find_raster_t2()
+RASTER_2015_PATH = find_raster_t1(DATA_SOURCE)
+RASTER_2026_PATH = find_raster_t2(DATA_SOURCE)
 OUTPUT_EXCEL_PATH = os.path.join(BASE_DIR, 'data', f'bien_dong_lulc_{YEAR_T1}_{YEAR_T2}.xlsx')
 
 # Bảng mã danh mục lớp phủ mặt đất (LULC) chuẩn hóa đồng bộ 4 lớp

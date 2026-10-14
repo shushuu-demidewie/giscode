@@ -1,58 +1,142 @@
 # -*- coding: utf-8 -*-
 """
-Quy trình phân loại ảnh viễn thám (GeoTIFF) bằng Random Forest với mẫu huấn luyện từ ArcMap (Shapefile).
-Các thư viện cần thiết: rasterio, geopandas, shapely, scikit-learn, numpy, joblib
-Cài đặt: pip install rasterio geopandas scikit-learn numpy joblib
+================================================================================
+QUY TRÌNH PHÂN LOẠI ẢNH VIỄN THÁM (GEOTIFF) BẰNG RANDOM FOREST
+Hỗ trợ dữ liệu năm 2015 và 2026 với mẫu huấn luyện từ ArcMap (Shapefile)
+================================================================================
+Các chức năng chính:
+  1. Tự động liên kết các đường dẫn dữ liệu chuẩn xác trong dự án (d:\\testgis):
+     - Dữ liệu năm 2015: data/dp2015Extrac.tif, Dkt2015/DKT2015.shp, data/ketquatach.shp
+     - Dữ liệu năm 2026: data/dp2026Extrac.tif, DKT2026/DKT2026.shp, data/ketquatach.shp
+  2. Trích xuất giá trị phổ tại các điểm mẫu và huấn luyện Random Forest.
+  3. Đánh giá độ chính xác độc lập (Train 70% - Validation 15% - Test 15%).
+  4. Phân loại toàn bộ ảnh theo khối (block processing), cắt theo mặt nạ ranh giới xã.
+  5. Xuất kết quả GeoTIFF (.tif), bảng màu ArcMap (.clr), ảnh xem trước (.png) và thống kê diện tích (ha).
+================================================================================
 """
 
 import os
 import sys
 
 # Đảm bảo hiển thị tiếng Việt trên terminal Windows không bị lỗi font/mã hóa
-if sys.stdout and sys.stdout.encoding != 'utf-8':
+if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-if sys.stderr and sys.stderr.encoding != 'utf-8':
+if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 # Tự động tạo lại file .shx nếu bị thiếu khi đọc Shapefile
 os.environ['SHAPE_RESTORE_SHX'] = 'YES'
 
+# Khắc phục cảnh báo xung đột thư viện PROJ database trên Windows
+try:
+    import pyproj
+    proj_dir = pyproj.datadir.get_data_dir()
+    if os.path.exists(proj_dir):
+        os.environ['PROJ_LIB'] = proj_dir
+except Exception:
+    pass
+
 import numpy as np
 import rasterio
 from rasterio.mask import mask
+from rasterio.features import geometry_mask
 import geopandas as gpd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, cohen_kappa_score
 import joblib
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
 
 
 # ==============================================================================
-# CẤU HÌNH ĐƯỜNG DẪN FILE DỮ LIỆU CÓ SẴN TRONG MÁY
+# CẤU HÌNH ĐƯỜNG DẪN DỮ LIỆU CHUẨN XÁC TRONG DỰ ÁN (d:\testgis)
 # ==============================================================================
-# Tự động định vị thư mục gốc dự án (d:\testgis)
+# Định vị thư mục gốc dự án (d:\testgis)
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+OUTPUT_DIR = os.path.join(BASE_DIR, 'data')
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# 1. Đường dẫn ảnh GeoTIFF đầu vào (ảnh Landsat 7 kênh cắt từ khu vực Hà Nội)
-IMAGE_PATH = os.path.join(BASE_DIR, 'datahanoi', 'anhcat.tif')
+# Bảng cấu hình chi tiết cho từng năm dữ liệu
+DATASET_CONFIG = {
+    2015: {
+        'name': "Năm 2015",
+        # 1. Đường dẫn ảnh GeoTIFF đầu vào (ảnh 7 kênh đã trích xuất theo khu vực nghiên cứu)
+        'raster': os.path.join(BASE_DIR, 'data', 'dp2015Extrac.tif'),
+        'raw_folder': os.path.join(BASE_DIR, 'LC8_HaNoi_2015'),
+        # 2. File ranh giới xã nghiên cứu
+        'boundary_shp': os.path.join(BASE_DIR, 'data', 'ketquatach.shp'),
+        # 3. File Shapefile điểm mẫu huấn luyện số hóa từ ArcMap
+        'roi_shp': os.path.join(BASE_DIR, 'Dkt2015', 'DKT2015.shp'),
+        'class_col': "Nhan",
+        # 4. Danh mục 4 lớp phủ mặt đất thực tế trong DKT2015
+        'classes': {
+            1: "Đất mặt nước",
+            10: "Đất nông nghiệp / Đất trống",
+            14: "Đất dân cư và xây dựng",
+            22: "Thảm thực vật"
+        },
+        # 5. Bảng màu hiển thị chuẩn theo hệ thống ArcMap (RGB)
+        'colors': {
+            1: [0, 92, 230],       # Mặt nước (Xanh dương)
+            10: [255, 255, 115],   # Đất nông nghiệp / trống (Vàng)
+            14: [230, 0, 0],       # Dân cư / Xây dựng (Đỏ)
+            22: [38, 115, 0],      # Thảm thực vật (Xanh lá)
+        },
+        # 6. File đầu ra
+        'output_raster': os.path.join(OUTPUT_DIR, 'anh_phan_loai_2015.tif'),
+        'output_model': os.path.join(BASE_DIR, 'giscode', 'rf_model_2015.pkl')
+    },
+    2026: {
+        'name': "Năm 2026",
+        # 1. Đường dẫn ảnh GeoTIFF đầu vào (ảnh 7 kênh đã trích xuất theo khu vực nghiên cứu)
+        'raster': os.path.join(BASE_DIR, 'data', 'dp2026Extrac.tif'),
+        'raw_folder': os.path.join(BASE_DIR, 'LC8_HaNoi_2026'),
+        # 2. File ranh giới xã nghiên cứu
+        'boundary_shp': os.path.join(BASE_DIR, 'data', 'ketquatach.shp'),
+        # 3. File Shapefile điểm mẫu huấn luyện số hóa từ ArcMap
+        'roi_shp': os.path.join(BASE_DIR, 'DKT2026', 'DKT2026.shp'),
+        'class_col': "Nhan",
+        # 4. Danh mục 4 lớp phủ mặt đất thực tế trong DKT2026
+        'classes': {
+            1: "Đất mặt nước",
+            10: "Đất nông nghiệp / Đất trống",
+            13: "Đất dân cư và xây dựng",
+            19: "Thảm thực vật"
+        },
+        # 5. Bảng màu hiển thị chuẩn theo hệ thống ArcMap (RGB)
+        'colors': {
+            1: [0, 92, 230],       # Mặt nước (Xanh dương)
+            10: [255, 255, 115],   # Đất nông nghiệp / trống (Vàng)
+            13: [230, 0, 0],       # Dân cư / Xây dựng (Đỏ)
+            19: [38, 115, 0],      # Thảm thực vật (Xanh lá)
+        },
+        # 6. File đầu ra
+        'output_raster': os.path.join(OUTPUT_DIR, 'anh_phan_loai_2026.tif'),
+        'output_model': os.path.join(BASE_DIR, 'giscode', 'rf_model_2026.pkl')
+    }
+}
 
-# Fallback nếu chuyển sang thư mục DLGIS
-if not os.path.exists(IMAGE_PATH):
-    fallback_img = r"D:\DLGIS\hanoi2026\datahanoi\anhcat01.tif"
-    if os.path.exists(fallback_img):
-        IMAGE_PATH = fallback_img
+# ------------------------------------------------------------------------------
+# LỰA CHỌN NĂM CẦN CHẠY PHÂN LOẠI
+# Người dùng có thể đổi TARGET_YEAR thành: 2015, 2026, hoặc 'ALL' để chạy cả hai năm
+# Hoặc truyền qua dòng lệnh: python rf_classification.py 2015
+# ------------------------------------------------------------------------------
+TARGET_YEAR = 2015  # Mặc định: 2015 (hoặc 2026, hoặc 'ALL')
 
-# 2. Đường dẫn file Shapefile (.shp) vùng mẫu trích xuất / số hóa từ ArcMap
-ROI_SHAPEFILE_PATH = os.path.join(BASE_DIR, 'Dkt', 'DKT30.shp')
-
-# 3. Tên cột chứa mã loại / lớp phân loại trong bảng thuộc tính ArcMap (trong file DKT30 là 'Nhan')
-CLASS_COLUMN_NAME = "Nhan"
-
-# 4. Đường dẫn lưu ảnh kết quả phân loại (GeoTIFF)
-OUTPUT_RASTER_PATH = os.path.join(BASE_DIR, 'data', 'anh_phan_loai_rf.tif')
-
-# 5. Đường dẫn lưu mô hình Random Forest sau khi huấn luyện (tùy chọn)
-MODEL_SAVE_PATH = os.path.join(BASE_DIR, 'giscode', 'rf_model.pkl')
+# Các biến đường dẫn tương thích ngược mặc định trỏ theo TARGET_YEAR
+ACTIVE_CFG = DATASET_CONFIG.get(TARGET_YEAR if TARGET_YEAR in DATASET_CONFIG else 2015)
+IMAGE_PATH = ACTIVE_CFG['raster']
+ROI_SHAPEFILE_PATH = ACTIVE_CFG['roi_shp']
+BOUNDARY_SHP_PATH = ACTIVE_CFG['boundary_shp']
+CLASS_COLUMN_NAME = ACTIVE_CFG['class_col']
+OUTPUT_RASTER_PATH = ACTIVE_CFG['output_raster']
+MODEL_SAVE_PATH = ACTIVE_CFG['output_model']
+CLASS_NAMES = ACTIVE_CFG['classes']
+CLASS_COLORS = ACTIVE_CFG['colors']
 
 
 # ==============================================================================
@@ -64,9 +148,9 @@ def extract_training_data(image_path, roi_path, class_col):
     """
     print(f"[*] Đang đọc ảnh viễn thám: {image_path}")
     if not os.path.exists(image_path):
-        raise FileNotFoundError(f"Không tìm thấy file ảnh: {image_path}\n--> Vui lòng copy file ảnh .tif vào thư mục và cập nhật IMAGE_PATH!")
+        raise FileNotFoundError(f"Không tìm thấy file ảnh: {image_path}\n--> Vui lòng kiểm tra lại đường dẫn!")
     if not os.path.exists(roi_path):
-        raise FileNotFoundError(f"Không tìm thấy file Shapefile: {roi_path}")
+        raise FileNotFoundError(f"Không tìm thấy file Shapefile mẫu: {roi_path}")
 
     # Đọc Shapefile mẫu tạo từ ArcMap
     print(f"[*] Đang đọc Shapefile mẫu huấn luyện: {roi_path}")
@@ -145,7 +229,8 @@ def extract_training_data(image_path, roi_path, class_col):
     print(f"[+] Trích xuất thành công {X.shape[0]} điểm mẫu với {X.shape[1]} kênh phổ.")
     unique_classes, counts = np.unique(y, return_counts=True)
     for c, cnt in zip(unique_classes, counts):
-        print(f"    - Lớp {c}: {cnt} pixels")
+        c_name = CLASS_NAMES.get(c, f"Lớp {c}")
+        print(f"    - Mã {c} ({c_name}): {cnt} điểm mẫu")
 
     return X, y
 
@@ -159,14 +244,12 @@ def train_random_forest(X, y, n_estimators=100, max_depth=None, train_ratio=0.70
     huấn luyện Random Forest và đánh giá mô hình trên cả 2 tập Validation và Test.
     """
     print(f"\n[*] Đang chia tập dữ liệu ({int(train_ratio*100)}% Train - {int(val_ratio*100)}% Val - {int(test_ratio*100)}% Test)...")
-    
-    # Bước 1: Tách tập Train (70%) và phần còn lại (30% gồm Val + Test)
+
     temp_ratio = val_ratio + test_ratio
     X_train, X_temp, y_train, y_temp = train_test_split(
         X, y, test_size=temp_ratio, random_state=random_state, stratify=y
     )
 
-    # Bước 2: Tách phần còn lại thành tập Validation (15%) và Test (15%)
     relative_test_ratio = test_ratio / temp_ratio
     X_val, X_test, y_val, y_test = train_test_split(
         X_temp, y_temp, test_size=relative_test_ratio, random_state=random_state, stratify=y_temp
@@ -180,7 +263,7 @@ def train_random_forest(X, y, n_estimators=100, max_depth=None, train_ratio=0.70
     rf_clf = RandomForestClassifier(
         n_estimators=n_estimators,
         max_depth=max_depth,
-        n_jobs=-1,  # Sử dụng tối đa tất cả các nhân CPU để tăng tốc
+        n_jobs=-1,
         random_state=random_state,
         oob_score=True
     )
@@ -189,27 +272,31 @@ def train_random_forest(X, y, n_estimators=100, max_depth=None, train_ratio=0.70
     # 1. Đánh giá trên tập Validation
     y_val_pred = rf_clf.predict(X_val)
     val_acc = accuracy_score(y_val, y_val_pred)
-    print("\n" + "="*50)
+    val_kappa = cohen_kappa_score(y_val, y_val_pred)
+    print("\n" + "=" * 60)
     print("KẾT QUẢ ĐÁNH GIÁ TRÊN TẬP VALIDATION")
-    print("="*50)
-    print(f"Độ chính xác Validation (Accuracy): {val_acc * 100:.2f}%")
+    print("=" * 60)
+    print(f"Độ chính xác Validation (Overall Accuracy): {val_acc * 100:.2f}%")
+    print(f"Hệ số Cohen's Kappa Validation:           {val_kappa:.4f}")
     print("\nBáo cáo chi tiết tập Validation (Classification Report):")
-    print(classification_report(y_val, y_val_pred))
+    print(classification_report(y_val, y_val_pred, zero_division=0))
     print("Ma trận nhầm lẫn Validation (Confusion Matrix):")
     print(confusion_matrix(y_val, y_val_pred))
 
     # 2. Đánh giá trên tập Test độc lập
     y_test_pred = rf_clf.predict(X_test)
     test_acc = accuracy_score(y_test, y_test_pred)
-    print("\n" + "="*50)
+    test_kappa = cohen_kappa_score(y_test, y_test_pred)
+    print("\n" + "=" * 60)
     print("KẾT QUẢ ĐÁNH GIÁ TRÊN TẬP TEST (KIỂM TRA ĐỘC LẬP)")
-    print("="*50)
+    print("=" * 60)
     print(f"Độ chính xác tổng thể Test (Overall Accuracy): {test_acc * 100:.2f}%")
+    print(f"Hệ số Cohen's Kappa tập Test:                {test_kappa:.4f}")
     if hasattr(rf_clf, "oob_score_"):
-        print(f"Điểm Out-Of-Bag (OOB Score): {rf_clf.oob_score_ * 100:.2f}%")
+        print(f"Điểm Out-Of-Bag (OOB Score):                 {rf_clf.oob_score_ * 100:.2f}%")
 
     print("\nBáo cáo chi tiết tập Test (Classification Report):")
-    print(classification_report(y_test, y_test_pred))
+    print(classification_report(y_test, y_test_pred, zero_division=0))
     print("Ma trận nhầm lẫn tập Test (Confusion Matrix):")
     print(confusion_matrix(y_test, y_test_pred))
 
@@ -219,10 +306,10 @@ def train_random_forest(X, y, n_estimators=100, max_depth=None, train_ratio=0.70
 # ==============================================================================
 # BƯỚC 3: PHÂN LOẠI TOÀN BỘ ẢNH TIF VÀ XUẤT FILE GEOTIFF
 # ==============================================================================
-def classify_and_export_raster(image_path, model, output_path, block_size=1024):
+def classify_and_export_raster(image_path, model, output_path, boundary_shp=None, class_colors=None, class_names=None, block_size=1024):
     """
-    Phân loại toàn bộ ảnh GeoTIFF theo từng khối (block) để tránh tràn bộ nhớ RAM (OOM)
-    và xuất ra file GeoTIFF mới giữ nguyên tọa độ và hệ quy chiếu (CRS).
+    Phân loại toàn bộ ảnh GeoTIFF theo từng khối (block) để tránh tràn bộ nhớ RAM,
+    áp dụng mặt nạ ranh giới xã (NoData = 127) và xuất file GeoTIFF chuẩn.
     """
     print(f"\n[*] Bắt đầu phân loại toàn bộ ảnh: {image_path}")
     print(f"[*] File kết quả sẽ được lưu tại: {output_path}")
@@ -231,21 +318,37 @@ def classify_and_export_raster(image_path, model, output_path, block_size=1024):
 
     with rasterio.open(image_path) as src:
         profile = src.profile.copy()
-        
+        crs = src.crs
+        transform = src.transform
+        height = src.height
+        width = src.width
+        n_bands = src.count
+
+        # Tạo mặt nạ ranh giới xã từ file Shapefile nếu có
+        boundary_mask = None
+        if boundary_shp and os.path.exists(boundary_shp):
+            print(f"[*] Áp dụng mặt nạ ranh giới xã từ: {boundary_shp}")
+            try:
+                bgdf = gpd.read_file(boundary_shp)
+                if bgdf.crs != crs:
+                    bgdf = bgdf.to_crs(crs)
+                # True = nằm ngoài ranh giới
+                boundary_mask = geometry_mask(bgdf.geometry, out_shape=(height, width), transform=transform, invert=False)
+            except Exception as e:
+                print(f"[!] Cảnh báo: Không thể tạo mặt nạ ranh giới: {e}")
+                boundary_mask = None
+
         # Cập nhật thông số metadata cho file kết quả (1 kênh phân loại)
+        # Giá trị NoData 127 tương thích chuẩn ArcMap (pl_T2015v.tif / pl_T2026.tif)
+        nodata_out = 127
         profile.update(
-            dtype=rasterio.int32,
+            dtype=rasterio.int16,
             count=1,
-            nodata=-9999,
+            nodata=nodata_out,
             compress='lzw'
         )
 
-        n_bands = src.count
-        height = src.height
-        width = src.width
-
         with rasterio.open(output_path, 'w', **profile) as dst:
-            # Duyệt theo từng khối (block) ngang và dọc
             for row in range(0, height, block_size):
                 row_end = min(row + block_size, height)
                 h_chunk = row_end - row
@@ -255,103 +358,132 @@ def classify_and_export_raster(image_path, model, output_path, block_size=1024):
                     w_chunk = col_end - col
 
                     window = rasterio.windows.Window(col, row, w_chunk, h_chunk)
-                    
-                    # Đọc dữ liệu khối: shape (bands, h_chunk, w_chunk)
                     block_data = src.read(window=window)
-                    
-                    # Chuyển đổi thành dạng (h_chunk * w_chunk, bands)
                     reshaped = block_data.reshape(n_bands, -1).T
 
-                    # Kiểm tra pixel NoData / pixel rỗng
+                    # Kiểm tra pixel NoData đầu vào
                     if src.nodata is not None:
                         valid_mask = (reshaped != src.nodata).all(axis=1)
                     else:
                         valid_mask = (reshaped != 0).any(axis=1)
 
-                    # Tạo mảng kết quả mặc định là NoData
-                    classified_block = np.full(reshaped.shape[0], -9999, dtype=np.int32)
+                    # Áp dụng mặt nạ ranh giới xã nếu có
+                    if boundary_mask is not None:
+                        sub_mask = boundary_mask[row:row_end, col:col_end].ravel()
+                        valid_mask = valid_mask & (~sub_mask)
+
+                    classified_block = np.full(reshaped.shape[0], nodata_out, dtype=np.int16)
 
                     if np.any(valid_mask):
-                        # Dự đoán nhãn cho các pixel hợp lệ
                         classified_block[valid_mask] = model.predict(reshaped[valid_mask])
 
-                    # Định hình lại thành (1, h_chunk, w_chunk) và ghi vào file GeoTIFF
                     classified_block = classified_block.reshape((1, h_chunk, w_chunk))
                     dst.write(classified_block, window=window)
 
     print(f"[+] Hoàn tất! Ảnh phân loại đã được lưu thành công tại: {output_path}")
 
-    # Tự động xuất ảnh màu PNG để xem trực quan ngay trên Paint / Photo Viewer
-    export_preview_image(output_path)
+    # Xuất ảnh màu PNG và file bảng màu ArcMap .clr
+    export_preview_and_stats(output_path, class_colors=class_colors, class_names=class_names, nodata_val=nodata_out)
 
 
-def export_preview_image(raster_path, png_path=None):
+# ==============================================================================
+# BƯỚC 4: XUẤT ẢNH XEM TRƯỚC (.PNG), BẢNG MÀU ARCMAP (.CLR) & THỐNG KÊ DIỆN TÍCH
+# ==============================================================================
+def export_preview_and_stats(raster_path, class_colors=None, class_names=None, nodata_val=127):
     """
-    Xuất ảnh màu RGB (.png) để xem trực quan và tạo file .clr tương thích với ArcMap.
+    Xuất ảnh màu RGB (.png) để xem trực quan, tạo file .clr tương thích với ArcMap,
+    và thống kê diện tích từng lớp (pixel và hecta).
     """
-    if png_path is None:
-        png_path = os.path.splitext(raster_path)[0] + "_preview.png"
+    if class_colors is None:
+        class_colors = CLASS_COLORS
+    if class_names is None:
+        class_names = CLASS_NAMES
 
-    # Bảng màu đại diện cho các lớp theo ArcMap:
-    # 1: Thủy hệ (Xanh lam), 7: Thực vật / Rừng (Xanh lá), 10: Đất trống / NN (Vàng), 14: Đô thị / Dân cư (Tím hồng)
-    color_map = {
-        1: [0, 112, 255],      # Thủy hệ (Xanh lam / Xanh dương)
-        7: [76, 230, 0],       # Rừng / Thực vật (Xanh lá)
-        10: [255, 255, 115],   # Đất trống / Đất nông nghiệp (Vàng)
-        14: [223, 115, 255],   # Dân cư / Xây dựng (Tím hồng)
-    }
-
-    # 1. Tự động tạo file bảng màu .clr để ArcMap tự nhận đúng màu khi mở file TIF
+    # 1. Tạo file bảng màu ArcMap (.clr)
     clr_path = os.path.splitext(raster_path)[0] + ".clr"
     try:
         with open(clr_path, "w", encoding="utf-8") as f_clr:
-            for val, col in sorted(color_map.items()):
+            for val, col in sorted(class_colors.items()):
                 f_clr.write(f"{val} {col[0]} {col[1]} {col[2]}\n")
+            f_clr.write(f"{nodata_val} 255 255 255\n")
         print(f"[+] Đã tạo file bảng màu ArcMap (.clr) tại: {clr_path}")
     except Exception as e:
         print(f"[!] Không thể tạo file .clr: {e}")
 
-    # 2. Xuất ảnh màu xem trước .png
+    # 2. Xuất ảnh màu xem trước .png và thống kê diện tích
+    png_path = os.path.splitext(raster_path)[0] + "_preview.png"
     try:
-        from PIL import Image
         with rasterio.open(raster_path) as src:
             data = src.read(1)
+            res_x, res_y = abs(src.res[0]), abs(src.res[1])
+            pixel_area_ha = (res_x * res_y) / 10000.0
 
         h, w = data.shape
         rgb = np.zeros((h, w, 3), dtype=np.uint8)
-        rgb[:, :] = [255, 255, 255]  # Nền ngoài ranh giới màu trắng sạch sẽ
+        rgb[:, :] = [255, 255, 255]  # Nền ngoài ranh giới màu trắng
 
-        for val, col in color_map.items():
-            rgb[data == val] = col
+        print("\n" + "=" * 60)
+        print("THỐNG KÊ DIỆN TÍCH CÁC LỚP PHỦ SAU PHÂN LOẠI")
+        print("=" * 60)
+        print(f"{'Mã':<6}{'Tên lớp phủ':<30}{'Số Pixel':<12}{'Diện tích (ha)':<15}{'Tỷ lệ (%)'}")
+        print("-" * 70)
 
-        img = Image.fromarray(rgb)
-        # Phóng to theo tỷ lệ phù hợp để xem rõ pixel
-        scale = max(1, 600 // max(h, w))
-        if scale > 1:
-            img = img.resize((w * scale, h * scale), Image.NEAREST)
+        valid_total = np.sum((data != nodata_val) & (data > 0))
 
-        img.save(png_path)
-        print(f"[+] Đã tạo ảnh màu xem trước trực quan tại: {png_path}")
+        for val, col in class_colors.items():
+            mask_val = (data == val)
+            count = np.sum(mask_val)
+            rgb[mask_val] = col
+            c_name = class_names.get(val, f"Lớp {val}")
+            area_ha = count * pixel_area_ha
+            pct = (count / valid_total * 100) if valid_total > 0 else 0
+            print(f"{val:<6}{c_name:<30}{count:<12}{area_ha:<15.2f}{pct:.2f}%")
+
+        print("-" * 70)
+        total_ha = valid_total * pixel_area_ha
+        print(f"{'TỔNG':<36}{valid_total:<12}{total_ha:<15.2f}100.00%")
+        print("=" * 60)
+
+        if HAS_PIL:
+            img = Image.fromarray(rgb)
+            scale = max(1, 600 // max(h, w))
+            if scale > 1:
+                img = img.resize((w * scale, h * scale), Image.NEAREST)
+
+            img.save(png_path)
+            print(f"[+] Đã tạo ảnh xem trước trực quan tại: {png_path}")
+        else:
+            print("[*] Bỏ qua xuất ảnh preview .png (Cần thư viện pillow nếu muốn xuất ảnh PNG).")
     except Exception as e:
         print(f"[!] Không thể xuất ảnh xem trước: {e}")
 
 
 # ==============================================================================
-# HÀM THỰC THI CHÍNH
+# HÀM THỰC THI CHO MỘT NĂM CỤ THỂ
 # ==============================================================================
-def main():
-    print("==========================================================")
-    print("    QUY TRÌNH PHÂN LOẠI RANDOM FOREST ẢNH VIỄN THÁM")
-    print("==========================================================")
+def run_classification_for_year(year):
+    if year not in DATASET_CONFIG:
+        raise ValueError(f"Năm không hợp lệ: {year}. Chỉ hỗ trợ: {list(DATASET_CONFIG.keys())}")
 
-    # 1. Trích xuất mẫu từ ảnh và Shapefile
+    cfg = DATASET_CONFIG[year]
+    print("\n" + "#" * 70)
+    print(f"# TIẾN TRÌNH PHÂN LOẠI RANDOM FOREST - {cfg['name'].upper()}")
+    print("#" * 70)
+    print(f"[*] Ảnh đầu vào:   {cfg['raster']}")
+    print(f"[*] Shapefile mẫu: {cfg['roi_shp']}")
+    print(f"[*] Ranh giới xã:  {cfg['boundary_shp']}")
+    print(f"[*] File kết quả:  {cfg['output_raster']}")
+    print(f"[*] Model lưu tại: {cfg['output_model']}")
+    print("-" * 70)
+
+    # 1. Trích xuất mẫu
     X, y = extract_training_data(
-        image_path=IMAGE_PATH,
-        roi_path=ROI_SHAPEFILE_PATH,
-        class_col=CLASS_COLUMN_NAME
+        image_path=cfg['raster'],
+        roi_path=cfg['roi_shp'],
+        class_col=cfg['class_col']
     )
 
-    # 2. Huấn luyện Random Forest và đánh giá độ chính xác (70% Train - 15% Val - 15% Test)
+    # 2. Huấn luyện Random Forest
     rf_model = train_random_forest(
         X=X,
         y=y,
@@ -362,18 +494,48 @@ def main():
         random_state=42
     )
 
-    # 3. Lưu mô hình đã huấn luyện (.pkl)
-    os.makedirs(os.path.dirname(os.path.abspath(MODEL_SAVE_PATH)), exist_ok=True)
-    joblib.dump(rf_model, MODEL_SAVE_PATH)
-    print(f"[*] Đã lưu mô hình Random Forest tại: {MODEL_SAVE_PATH}")
+    # 3. Lưu mô hình .pkl
+    os.makedirs(os.path.dirname(os.path.abspath(cfg['output_model'])), exist_ok=True)
+    joblib.dump(rf_model, cfg['output_model'])
+    print(f"[*] Đã lưu mô hình Random Forest tại: {cfg['output_model']}")
 
-    # 4. Phân loại toàn bộ ảnh và xuất file GeoTIFF
+    # 4. Phân loại và xuất GeoTIFF
     classify_and_export_raster(
-        image_path=IMAGE_PATH,
+        image_path=cfg['raster'],
         model=rf_model,
-        output_path=OUTPUT_RASTER_PATH,
+        output_path=cfg['output_raster'],
+        boundary_shp=cfg['boundary_shp'],
+        class_colors=cfg['colors'],
+        class_names=cfg['classes'],
         block_size=1024
     )
+
+
+# ==============================================================================
+# HÀM THỰC THI CHÍNH
+# ==============================================================================
+def main():
+    print("=" * 70)
+    print("    CHƯƠNG TRÌNH PHÂN LOẠI LỚP PHỦ BẰNG RANDOM FOREST")
+    print("=" * 70)
+
+    # Kiểm tra nếu người dùng truyền tham số dòng lệnh: python rf_classification.py 2015/2026/ALL
+    selected_year = TARGET_YEAR
+    if len(sys.argv) > 1:
+        arg_val = sys.argv[1].strip().upper()
+        if arg_val in ['2015', '2026']:
+            selected_year = int(arg_val)
+        elif arg_val == 'ALL':
+            selected_year = 'ALL'
+
+    if selected_year == 'ALL':
+        print("[*] Chế độ thực thi: Phân loại cả 2 mốc thời gian 2015 và 2026...")
+        run_classification_for_year(2015)
+        run_classification_for_year(2026)
+    else:
+        run_classification_for_year(selected_year)
+
+    print("\n[HOÀN TẤT] Toàn bộ quy trình phân loại Random Forest đã hoàn thành thành công!")
 
 
 if __name__ == "__main__":
