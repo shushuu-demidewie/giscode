@@ -106,6 +106,8 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Danh sách ứng viên tìm kiếm ảnh viễn thám Landsat 8
 CANDIDATE_IMAGES = [
+    os.path.join(BASE_DIR, 'datath4', 'Extracth4.tif'),
+    os.path.join(BASE_DIR, 'datath11', 'Extrac11.tif'),
     os.path.join(WORKSPACE_DIR, 'data', 'landsat8_study_area.tif'),
     os.path.join(BASE_DIR, 'data', 'Extracth8.tif'),
     os.path.join(BASE_DIR, 'data', 'dp2026Extrac.tif'),
@@ -116,6 +118,8 @@ CANDIDATE_IMAGES = [
 
 # Danh sách ứng viên tìm kiếm Shapefile mẫu sạt lở
 CANDIDATE_ROIS = [
+    os.path.join(BASE_DIR, 'DKTth4', 'DKT4.shp'),
+    os.path.join(BASE_DIR, 'DKTth11', 'DKT11.shp'),
     os.path.join(WORKSPACE_DIR, 'lsm_results', 'demo_workspace', 'demo_inventory', 'landslides_demo.shp'),
     os.path.join(BASE_DIR, 'DKT2026', 'DKT2026.shp'),
     os.path.join(BASE_DIR, 'DKT', 'DKT.shp'),
@@ -579,6 +583,12 @@ def classify_and_export_raster(
         classes = list(pipeline.classes_)
         if landslide_class is not None and landslide_class in classes:
             landslide_idx = classes.index(landslide_class)
+        elif 22 in classes:
+            landslide_idx = classes.index(22)  # Nhãn đất trống / sạt trượt đất Tháng 4
+        elif 21 in classes:
+            landslide_idx = classes.index(21)  # Nhãn đất trống / sạt trượt đất mới Tháng 11
+        elif 1 in classes and len(classes) == 2:
+            landslide_idx = classes.index(1)   # Nhãn nhị phân có sạt lở
         else:
             landslide_idx = len(classes) - 1
 
