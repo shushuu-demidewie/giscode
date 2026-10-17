@@ -1,0 +1,30 @@
+{
+    "model": "Random Forest",
+    "crs": "EPSG:4326",
+    "description": "Tọa độ Bounding Box bản đồ nguy cơ trượt lở Random Forest trên WebGIS",
+    "png_file": "webgis_nguy_co_truot_lo_rf_rgba.png",
+    "bounds_geojson": [
+        105.77051715664395,
+        21.140961830443548,
+        105.88672437646972,
+        21.249942566953553
+    ],
+    "leaflet_bounds": [
+        [
+            21.140961830443548,
+            105.77051715664395
+        ],
+        [
+            21.249942566953553,
+            105.88672437646972
+        ]
+    ],
+    "center": [
+        21.19545219869855,
+        105.82862076655684
+    ],
+    "west_lon": 105.77051715664395,
+    "south_lat": 21.140961830443548,
+    "east_lon": 105.88672437646972,
+    "north_lat": 21.249942566953553
+}

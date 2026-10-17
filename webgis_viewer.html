@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hệ thống WebGIS Khoanh vùng Nguy cơ Trượt lở Đất | Landsat 8 - RF vs SVM</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body, html { height: 100%; width: 100%; font-family: 'Inter', sans-serif; overflow: hidden; }
+        #map { height: 100vh; width: 100vw; z-index: 1; }
+
+        /* Glassmorphism Control Panel */
+        .glass-panel {
+            position: absolute;
+            background: rgba(18, 24, 38, 0.88);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 12px;
+            color: #ffffff;
+            z-index: 1000;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+        }
+
+        /* Header Info Card */
+        .header-card {
+            top: 20px;
+            left: 20px;
+            padding: 16px 20px;
+            max-width: 440px;
+        }
+        .header-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #4da6ff;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+        .header-desc {
+            font-size: 12px;
+            color: #b0c4de;
+            line-height: 1.45;
+        }
+
+        /* Layer Switcher & Opacity Card */
+        .control-card {
+            top: 140px;
+            left: 20px;
+            padding: 16px 20px;
+            width: 340px;
+        }
+        .card-title {
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #e2e8f0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 6px;
+        }
+        .model-select {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 14px;
+        }
+        .model-btn {
+            flex: 1;
+            padding: 8px 10px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #ffffff;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.25s ease;
+            text-align: center;
+        }
+        .model-btn:hover { background: rgba(77, 166, 255, 0.2); }
+        .model-btn.active {
+            background: #2563eb;
+            border-color: #60a5fa;
+            box-shadow: 0 0 12px rgba(37, 99, 235, 0.6);
+        }
+
+        /* Slider */
+        .slider-group {
+            margin-top: 10px;
+        }
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: #94a3b8;
+            margin-bottom: 6px;
+        }
+        input[type=range] {
+            width: 100%;
+            height: 5px;
+            border-radius: 5px;
+            background: rgba(255, 255, 255, 0.2);
+            outline: none;
+            -webkit-appearance: none;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            background: #60a5fa;
+            cursor: pointer;
+            box-shadow: 0 0 8px rgba(96, 165, 250, 0.8);
+        }
+
+        /* Legend */
+        .legend-card {
+            bottom: 25px;
+            right: 25px;
+            padding: 14px 18px;
+            min-width: 220px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            font-size: 11px;
+            margin-bottom: 6px;
+            color: #cbd5e1;
+        }
+        .legend-color {
+            width: 18px;
+            height: 12px;
+            border-radius: 3px;
+            margin-right: 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }
+
+        /* Comparative Metrics Card */
+        .metrics-card {
+            bottom: 25px;
+            left: 20px;
+            padding: 14px 18px;
+            width: 340px;
+        }
+        .metric-table {
+            width: 100%;
+            font-size: 11px;
+            border-collapse: collapse;
+        }
+        .metric-table th, .metric-table td {
+            padding: 5px 6px;
+            text-align: left;
+        }
+        .metric-table th {
+            color: #94a3b8;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            font-weight: 600;
+        }
+        .metric-table tr:hover { background: rgba(255, 255, 255, 0.05); }
+        .val-rf { color: #60a5fa; font-weight: 600; }
+        .val-svm { color: #f87171; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <!-- Header Panel -->
+    <div class="glass-panel header-card">
+        <div class="header-title">Hệ thống Bản đồ WebGIS Khoanh vùng Nguy cơ Trượt lở</div>
+        <div class="header-desc">
+            Ứng dụng thuật toán Học máy <b>Random Forest (RF)</b> và <b>Support Vector Machine (SVM)</b> 
+            trên ảnh viễn thám đa phổ <b>Landsat 8 OLI</b> (12 kênh đặc trưng).
+        </div>
+    </div>
+
+    <!-- Control Panel -->
+    <div class="glass-panel control-card">
+        <div class="card-title">Lựa chọn Mô hình Học máy</div>
+        <div class="model-select">
+            <button class="model-btn active" id="btnRF" onclick="switchModel('rf')">Random Forest</button>
+            <button class="model-btn" id="btnSVM" onclick="switchModel('svm')">SVM (RBF)</button>
+        </div>
+
+        <div class="slider-group">
+            <div class="slider-label">
+                <span>Độ mờ lớp phủ (Opacity)</span>
+                <span id="opacityVal">85%</span>
+            </div>
+            <input type="range" id="opacitySlider" min="0" max="100" value="85" oninput="changeOpacity(this.value)">
+        </div>
+    </div>
+
+    <!-- Metrics Comparison -->
+    <div class="glass-panel metrics-card">
+        <div class="card-title">So sánh Hiệu năng Mô hình (Test Set)</div>
+        <table class="metric-table">
+            <thead>
+                <tr>
+                    <th>Chỉ số</th>
+                    <th>RF</th>
+                    <th>SVM</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Độ chính xác (Accuracy)</td>
+                    <td class="val-rf">97.2%</td>
+                    <td class="val-svm">97.2%</td>
+                </tr>
+                <tr>
+                    <td>Chỉ số F1-Score</td>
+                    <td class="val-rf">0.9722</td>
+                    <td class="val-svm">0.9722</td>
+                </tr>
+                <tr>
+                    <td>Cohen's Kappa</td>
+                    <td class="val-rf">0.9444</td>
+                    <td class="val-svm">0.9444</td>
+                </tr>
+                <tr>
+                    <td>ROC-AUC</td>
+                    <td class="val-rf">0.9784</td>
+                    <td class="val-svm">0.9938</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Legend Panel -->
+    <div class="glass-panel legend-card">
+        <div class="card-title">Phân cấp Nguy cơ Trượt lở</div>
+        <div class="legend-item"><div class="legend-color" style="background:#38A800;"></div> Cấp 1: Rất thấp (0.0 - 0.2)</div>
+        <div class="legend-item"><div class="legend-color" style="background:#B0E000;"></div> Cấp 2: Thấp (0.2 - 0.4)</div>
+        <div class="legend-item"><div class="legend-color" style="background:#FFFF00;"></div> Cấp 3: Trung bình (0.4 - 0.6)</div>
+        <div class="legend-item"><div class="legend-color" style="background:#FF8000;"></div> Cấp 4: Cao (0.6 - 0.8)</div>
+        <div class="legend-item"><div class="legend-color" style="background:#FF0000;"></div> Cấp 5: Rất cao (0.8 - 1.0)</div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // Khởi tạo bản đồ
+        const mapCenter = [21.19545219869855, 105.82862076655684];
+        const mapBounds = [[21.140961830443548, 105.77051715664395], [21.249942566953553, 105.88672437646972]];
+
+        const map = L.map('map', {
+            center: mapCenter,
+            zoom: 12,
+            zoomControl: false
+        });
+        L.control.zoom({ position: 'topright' }).addTo(map);
+
+        // Các lớp bản đồ nền
+        const esriSatellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+            maxZoom: 18
+        }).addTo(map);
+
+        const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        });
+
+        L.control.layers({
+            "Ảnh vệ tinh (Esri World Imagery)": esriSatellite,
+            "Bản đồ OpenStreetMap": osm
+        }, null, { position: 'topright' }).addTo(map);
+
+        // Lớp ảnh phủ nguy cơ sạt lở
+        const rfImageUrl = 'webgis_nguy_co_truot_lo_rf_rgba.png';
+        const svmImageUrl = 'webgis_nguy_co_truot_lo_svm_rgba.png';
+
+        let rfOverlay = L.imageOverlay(rfImageUrl, mapBounds, { opacity: 0.85, interactive: true }).addTo(map);
+        let svmOverlay = L.imageOverlay(svmImageUrl, mapBounds, { opacity: 0.85, interactive: true });
+        map.fitBounds(mapBounds);
+
+        let currentModel = 'rf';
+
+        function switchModel(model) {
+            currentModel = model;
+            const btnRF = document.getElementById('btnRF');
+            const btnSVM = document.getElementById('btnSVM');
+            const curOpacity = parseFloat(document.getElementById('opacitySlider').value) / 100.0;
+
+            if (model === 'rf') {
+                btnRF.classList.add('active');
+                btnSVM.classList.remove('active');
+                if (map.hasLayer(svmOverlay)) map.removeLayer(svmOverlay);
+                rfOverlay.setOpacity(curOpacity);
+                rfOverlay.addTo(map);
+            } else {
+                btnSVM.classList.add('active');
+                btnRF.classList.remove('active');
+                if (map.hasLayer(rfOverlay)) map.removeLayer(rfOverlay);
+                svmOverlay.setOpacity(curOpacity);
+                svmOverlay.addTo(map);
+            }
+        }
+
+        function changeOpacity(val) {
+            const opacity = parseFloat(val) / 100.0;
+            document.getElementById('opacityVal').innerText = val + '%';
+            if (currentModel === 'rf') {
+                rfOverlay.setOpacity(opacity);
+            } else {
+                svmOverlay.setOpacity(opacity);
+            }
+        }
+    </script>
+</body>
+</html>
