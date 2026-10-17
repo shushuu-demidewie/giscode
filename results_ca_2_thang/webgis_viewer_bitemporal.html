@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGIS Đa Thời Gian - Đánh Giá Biến Động Nguy Cơ Trượt Lở Đất (Tháng 4 vs Tháng 11/2024)</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #map { width: 100%; height: 100%; }
+        .header-panel {
+            position: absolute; top: 12px; left: 60px; z-index: 1000;
+            background: rgba(255, 255, 255, 0.95); padding: 12px 18px;
+            border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+            max-width: 520px; border-left: 5px solid #e31a1c;
+        }
+        .header-panel h2 { margin: 0 0 4px 0; font-size: 15px; color: #800026; text-transform: uppercase; font-weight: bold; }
+        .header-panel p { margin: 0; font-size: 12px; color: #444; line-height: 1.4; }
+        .control-panel {
+            position: absolute; top: 12px; right: 12px; z-index: 1000;
+            background: rgba(255, 255, 255, 0.95); padding: 16px;
+            border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+            width: 280px; font-size: 12px;
+        }
+        .control-panel h4 { margin: 0 0 10px 0; font-size: 13px; color: #111; border-bottom: 2px solid #ddd; padding-bottom: 5px; }
+        .section-title { font-weight: bold; margin-top: 10px; margin-bottom: 6px; color: #1e3d59; }
+        .layer-item { margin-bottom: 6px; }
+        .slider-box { margin-top: 12px; border-top: 1px dashed #ccc; padding-top: 8px; }
+        .slider-box label { display: block; margin-bottom: 3px; font-weight: bold; }
+        .legend-panel {
+            position: absolute; bottom: 25px; right: 12px; z-index: 1000;
+            background: rgba(255, 255, 255, 0.95); padding: 12px 15px;
+            border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+            font-size: 11px; width: 220px;
+        }
+        .legend-item { display: flex; align-items: center; margin-bottom: 5px; }
+        .legend-color { width: 22px; height: 14px; margin-right: 8px; border-radius: 3px; border: 1px solid #777; }
+        .stat-badge {
+            display: inline-block; padding: 2px 6px; border-radius: 4px;
+            font-size: 11px; font-weight: bold; background: #fee0d2; color: #99000d; margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div class="header-panel">
+        <h2>WebGIS Đa Thời Gian: Nguy Cơ Trượt Lở Đất</h2>
+        <p><strong>Khu vực:</strong> Xã Mường Lai, Lục Yên, Yên Bái</p>
+        <p><strong>So sánh đối chứng:</strong> Tháng 4/2024 (Trước bão) vs Tháng 11/2024 (Sau bão số 3 Yagi)</p>
+        <span class="stat-badge">Mô hình: Random Forest & Support Vector Machine</span>
+    </div>
+    <div class="control-panel">
+        <h4>ĐIỀU KHIỂN ĐA THỜI GIAN</h4>
+        
+        <div class="section-title">1. Chọn Thời Điểm Quan Sát:</div>
+        <div class="layer-item">
+            <input type="radio" id="time_t4" name="time_select" value="t4">
+            <label for="time_t4"><strong>Tháng 4/2024</strong> (Mùa khô - Trước bão)</label>
+        </div>
+        <div class="layer-item">
+            <input type="radio" id="time_t11" name="time_select" value="t11">
+            <label for="time_t11"><strong>Tháng 11/2024</strong> (Sau bão Yagi)</label>
+        </div>
+        <div class="layer-item">
+            <input type="radio" id="time_diff" name="time_select" value="diff" checked>
+            <label for="time_diff"><strong style="color:#d95f02;">Bản đồ Biến động Nguy cơ</strong> (Diff)</label>
+        </div>
+
+        <div class="section-title">2. Chọn Thuật Toán Học Máy:</div>
+        <div class="layer-item">
+            <input type="radio" id="algo_rf" name="algo_select" value="rf" checked>
+            <label for="algo_rf">Random Forest (RF)</label>
+        </div>
+        <div class="layer-item">
+            <input type="radio" id="algo_svm" name="algo_select" value="svm">
+            <label for="algo_svm">Support Vector Machine (SVM)</label>
+        </div>
+
+        <div class="slider-box">
+            <label>Độ trong suốt lớp phủ: <span id="opacity_val">85%</span></label>
+            <input type="range" id="opacity_slider" min="0" max="100" value="85" style="width: 100%;">
+        </div>
+    </div>
+
+    <div class="legend-panel" id="legend_box">
+        <!-- Chú giải động cập nhật theo lớp đang chọn -->
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const map = L.map('map').setView([22.14841904294743, 104.8204751272251], 13);
+        const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: 'OSM' });
+        const esri = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'ESRI' }).addTo(map);
+
+        L.control.layers({ 'Ảnh vệ tinh ESRI': esri, 'Bản đồ nền OSM': osm }).addTo(map);
+
+        const bounds = [[22.110834869065478, 104.77824103931766], [22.186003216829384, 104.86270921513253]];
+
+        // Đường dẫn tương đối tới các ảnh PNG RGBA
+        const overlays = {
+            't4_rf': L.imageOverlay('../results_thang_4/thang4_webgis_rf_rgba.png', bounds, { opacity: 0.85 }),
+            't4_svm': L.imageOverlay('../results_thang_4/thang4_webgis_svm_rgba.png', bounds, { opacity: 0.85 }),
+            't11_rf': L.imageOverlay('../results_thang_11/thang11_webgis_rf_rgba.png', bounds, { opacity: 0.85 }),
+            't11_svm': L.imageOverlay('../results_thang_11/thang11_webgis_svm_rgba.png', bounds, { opacity: 0.85 }),
+            'diff_rf': L.imageOverlay('webgis_bien_dong_rf_rgba.png', bounds, { opacity: 0.85 }),
+            'diff_svm': L.imageOverlay('webgis_bien_dong_svm_rgba.png', bounds, { opacity: 0.85 })
+        };
+
+        let currentActiveLayer = null;
+
+        function updateLayer() {
+            const timeVal = document.querySelector('input[name="time_select"]:checked').value;
+            const algoVal = document.querySelector('input[name="algo_select"]:checked').value;
+            const key = timeVal + '_' + algoVal;
+
+            if (currentActiveLayer) {
+                map.removeLayer(currentActiveLayer);
+            }
+
+            currentActiveLayer = overlays[key];
+            if (currentActiveLayer) {
+                const op = document.getElementById('opacity_slider').value / 100.0;
+                currentActiveLayer.setOpacity(op);
+                map.addLayer(currentActiveLayer);
+            }
+
+            updateLegend(timeVal);
+        }
+
+        function updateLegend(timeVal) {
+            const leg = document.getElementById('legend_box');
+            if (timeVal === 'diff') {
+                leg.innerHTML = `
+                    <strong>CHÚ GIẢI BIẾN ĐỘNG NGUY CƠ</strong>
+                    <div class="legend-item" style="margin-top:8px;"><div class="legend-color" style="background:#2b83ba;"></div> Giảm nguy cơ (Hồi phục)</div>
+                    <div class="legend-item"><div class="legend-color" style="background:#e0e0e0;"></div> Không đổi (Ổn định)</div>
+                    <div class="legend-item"><div class="legend-color" style="background:#fecc5c;"></div> Tăng 1 cấp nguy cơ</div>
+                    <div class="legend-item"><div class="legend-color" style="background:#fd8d3c;"></div> Tăng 2 cấp nguy cơ</div>
+                    <div class="legend-item"><div class="legend-color" style="background:#e31a1c;"></div> Tăng rất mạnh (>= 3 cấp / Sạt mới)</div>
+                `;
+            } else {
+                leg.innerHTML = `
+                    <strong>CHÚ GIẢI 5 CẤP NGUY CƠ</strong>
+                    <div class="legend-item" style="margin-top:8px;"><div class="legend-color" style="background:#38a800;"></div> Cấp 1: Rất thấp (0 - 0.2)</div>
+                    <div class="legend-item"><div class="legend-color" style="background:#b0e000;"></div> Cấp 2: Thấp (0.2 - 0.4)</div>
+                    <div class="legend-item"><div class="legend-color" style="background:#ffff00;"></div> Cấp 3: Trung bình (0.4 - 0.6)</div>
+                    <div class="legend-item"><div class="legend-color" style="background:#ff8000;"></div> Cấp 4: Cao (0.6 - 0.8)</div>
+                    <div class="legend-item"><div class="legend-color" style="background:#ff0000;"></div> Cấp 5: Rất cao (0.8 - 1.0)</div>
+                `;
+            }
+        }
+
+        document.querySelectorAll('input[name="time_select"]').forEach(el => el.addEventListener('change', updateLayer));
+        document.querySelectorAll('input[name="algo_select"]').forEach(el => el.addEventListener('change', updateLayer));
+
+        document.getElementById('opacity_slider').addEventListener('input', (e) => {
+            const val = e.target.value / 100.0;
+            document.getElementById('opacity_val').innerText = e.target.value + '%';
+            if (currentActiveLayer) {
+                currentActiveLayer.setOpacity(val);
+            }
+        });
+
+        updateLayer();
+        map.fitBounds(bounds);
+    </script>
+</body>
+</html>
